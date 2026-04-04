@@ -119,9 +119,12 @@ jobs:
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@main
 
+      - name: Exclude test project from release build
+        run: sed -i '/{D1CBF84E-07F8-4ACB-9CD2-BD205FDEEE1E}.*Release.*Build\.0/d' rpcs3.sln
+
       - name: Compile RPCS3
         shell: pwsh
-        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets" /p:GTestInstalled=false
+        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets"
 
       - name: Pack up build artifacts
         run: |
