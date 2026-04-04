@@ -28,6 +28,11 @@ else()
 
 	add_subdirectory(curl EXCLUDE_FROM_ALL)
 
+	# Propagate wolfSSL usage requirements (includes OPENSSL_EXTRA / WOLFSSL_TLS13 with WOLFSSL_NO_OPTIONS_H).
+	if(TARGET libcurl_static AND TARGET wolfssl)
+		target_link_libraries(libcurl_static PUBLIC wolfssl)
+	endif()
+
 	add_library(3rdparty_libcurl INTERFACE)
 	target_link_libraries(3rdparty_libcurl INTERFACE libcurl_static)
 

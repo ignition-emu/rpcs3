@@ -190,6 +190,8 @@ if(BUILD_RPCS3_TESTS)
             tests/test_rsx_cfg.cpp
             tests/test_rsx_fp_asm.cpp
             tests/test_dmux_pamf.cpp
+            tests/test_pine_controller_protocol.cpp
+            tests/test_pine_controller_staging.cpp
     )
 
     target_link_libraries(rpcs3_test

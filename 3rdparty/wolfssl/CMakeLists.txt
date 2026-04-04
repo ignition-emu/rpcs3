@@ -4,7 +4,10 @@ if(USE_SYSTEM_WOLFSSL)
 	add_library(wolfssl INTERFACE)
 	target_link_libraries(wolfssl INTERFACE PkgConfig::WolfSSL)
 else()
-	option(WOLFSSL_TLS13 "Enable wolfSSL TLS v1.3 (default: enabled)" OFF)
+	# TLS 1.3: required so libcurl uses wolfSSL_* APIs (not OpenSSL-compat SSL_CTX_*).
+	option(WOLFSSL_TLS13 "Enable wolfSSL TLS v1.3 (default: enabled)" ON)
+	# Pulls MD4, OPENSSL_EXTRA-adjacent APIs, etc., expected by bundled curl + wolfssl.
+	set(WOLFSSL_CURL ON CACHE BOOL "Enable wolfSSL cURL integration" FORCE)
 	set(WOLFSSL_SHA3 ON CACHE STRING "Enable wolfSSL SHA-3 support (default: enabled on x86_64/aarch64)")
 	set(WOLFSSL_SHAKE256 ON CACHE STRING "Enable wolfSSL SHAKE256 support (default: enabled on x86_64/aarch64)")
 	option(WOLFSSL_BASE64_ENCODE "Enable Base64 encoding (default: enabled on x86_64)" OFF)
@@ -22,5 +25,8 @@ else()
 
 	add_subdirectory(wolfssl EXCLUDE_FROM_ALL)
 
-	target_compile_definitions(wolfssl PUBLIC WOLFSSL_DES_ECB HAVE_WRITE_DUP FP_MAX_BITS=8192 WOLFSSL_NO_OPTIONS_H)
+	# WOLFSSL_NO_OPTIONS_H skips generated options.h; consumers must match the built feature set.
+	target_compile_definitions(wolfssl PUBLIC
+		WOLFSSL_DES_ECB HAVE_WRITE_DUP FP_MAX_BITS=8192 WOLFSSL_NO_OPTIONS_H
+		WOLFSSL_TLS13 OPENSSL_EXTRA)
 endif()
