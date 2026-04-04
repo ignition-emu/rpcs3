@@ -10,6 +10,7 @@
 // conflict with each others
 #define IPC_DEFAULT_SLOT 28012
 
+#include <cstring>
 #include <string>
 #include "stdafx.h"
 #include <stdio.h>
@@ -121,6 +122,16 @@ namespace pine
 			MsgUUID = 0xD,          /**< Returns the game UUID. */
 			MsgGameVersion = 0xE,   /**< Returns the game verion. */
 			MsgStatus = 0xF,        /**< Returns the emulator status. */
+			MsgGetSetting = 0x10,   /**< Get g_cfg value by section + key (Ignition / PCSX2-compatible). */
+			MsgSetSetting = 0x11,   /**< Set g_cfg value (Ignition / PCSX2-compatible). */
+			MsgApplySettings = 0x12, /**< Persist and apply settings (Ignition / PCSX2-compatible). */
+			MsgListControllers = 0x13, /**< List currently visible controllers. */
+			MsgGetPortBinding = 0x14, /**< Read port -> device/handler assignment. */
+			MsgAutoMapPort = 0x15, /**< Stage port auto-map request. */
+			MsgGetButtonBinding = 0x16, /**< Read button binding (staged first). */
+			MsgSetButtonBinding = 0x17, /**< Stage button binding change. */
+			MsgListPatches = 0x18, /**< List active-title patch catalog entries. */
+			MsgSetPatchEnabled = 0x19, /**< Enable/disable a patch by opaque patch ID. */
 			MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
 		};
 
@@ -154,7 +165,7 @@ namespace pine
 		 * return value: IPCBuffer containing a buffer with the result
 		 *               of the command and its size.
 		 */
-		IPCBuffer ParseCommand(char* buf, char* ret_buffer, u32 buf_size)
+		static IPCBuffer ParseCommand(char* buf, char* ret_buffer, u32 buf_size)
 		{
 			usz ret_cnt = 5;
 			usz buf_cnt = 0;
@@ -293,7 +304,7 @@ namespace pine
 				}
 				case MsgVersion:
 				{
-					if (!write_string("RPCS3 " + Impl::get_version_and_branch()))
+					if (!write_string(Impl::get_ipc_version_string()))
 						return error();
 					break;
 				}
@@ -304,7 +315,6 @@ namespace pine
 					EmuStatus status = Impl::get_status();
 					ToArray(ret_buffer, status, ret_cnt);
 					ret_cnt += 4;
-					buf_cnt += 4;
 					break;
 				}
 				case MsgTitle:
@@ -328,6 +338,274 @@ namespace pine
 				case MsgGameVersion:
 				{
 					if (!write_string(Impl::get_app_version()))
+						return error();
+					break;
+				}
+				case MsgGetSetting:
+				{
+					// Wire format: [u32 section_len][section bytes][u32 key_len][key bytes]
+					// Response:    [u32 value_len][value bytes] (PCSX2 / Ignition)
+					if (!SafetyChecks(buf_cnt, 8, ret_cnt, 0, buf_size))
+						return error();
+					const u32 section_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += 4;
+					if (!SafetyChecks(buf_cnt, section_len + 4, ret_cnt, 0, buf_size))
+						return error();
+					const std::string section(reinterpret_cast<const char*>(&buf[buf_cnt]), section_len);
+					buf_cnt += section_len;
+					const u32 key_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += 4;
+					if (!SafetyChecks(buf_cnt, key_len, ret_cnt, 0, buf_size))
+						return error();
+					const std::string key(reinterpret_cast<const char*>(&buf[buf_cnt]), key_len);
+					buf_cnt += key_len;
+					const std::string value = Impl::pine_get_setting(section, key);
+					const u32 val_len = static_cast<u32>(value.size());
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4 + val_len, buf_size))
+						return error();
+					ToArray(ret_buffer, val_len, ret_cnt);
+					ret_cnt += sizeof(u32);
+					if (val_len > 0)
+					{
+						memcpy(&ret_buffer[ret_cnt], value.data(), val_len);
+						ret_cnt += val_len;
+					}
+					break;
+				}
+				case MsgSetSetting:
+				{
+					// Wire format: [u32 section_len][section][u32 key_len][key][u32 value_len][value]
+					if (!SafetyChecks(buf_cnt, 12, ret_cnt, 0, buf_size))
+						return error();
+					const u32 ss_section_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += 4;
+					if (!SafetyChecks(buf_cnt, ss_section_len + 4, ret_cnt, 0, buf_size))
+						return error();
+					const std::string ss_section(reinterpret_cast<const char*>(&buf[buf_cnt]), ss_section_len);
+					buf_cnt += ss_section_len;
+					const u32 ss_key_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += 4;
+					if (!SafetyChecks(buf_cnt, ss_key_len + 4, ret_cnt, 0, buf_size))
+						return error();
+					const std::string ss_key(reinterpret_cast<const char*>(&buf[buf_cnt]), ss_key_len);
+					buf_cnt += ss_key_len;
+					const u32 ss_value_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += 4;
+					if (!SafetyChecks(buf_cnt, ss_value_len, ret_cnt, 0, buf_size))
+						return error();
+					const std::string ss_value(reinterpret_cast<const char*>(&buf[buf_cnt]), ss_value_len);
+					buf_cnt += ss_value_len;
+					if (!Impl::pine_set_setting(ss_section, ss_key, ss_value))
+						return error();
+					break;
+				}
+				case MsgApplySettings:
+				{
+					if (!Impl::pine_apply_settings())
+						return error();
+					break;
+				}
+				case MsgListControllers:
+				{
+					const auto controllers = Impl::pine_list_controllers();
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, 4, buf_size))
+						return error();
+					ToArray(ret_buffer, ::narrow<u32>(controllers.size()), ret_cnt);
+					ret_cnt += sizeof(u32);
+					for (const auto& controller : controllers)
+					{
+						const u32 id_len = ::narrow<u32>(controller.device_id.size());
+						const u32 name_len = ::narrow<u32>(controller.display_name.size());
+						if (!SafetyChecks(buf_cnt, 0, ret_cnt, sizeof(u32) + id_len + sizeof(u32) + name_len, buf_size))
+							return error();
+						ToArray(ret_buffer, id_len, ret_cnt);
+						ret_cnt += sizeof(u32);
+						if (id_len > 0)
+						{
+							memcpy(&ret_buffer[ret_cnt], controller.device_id.data(), id_len);
+							ret_cnt += id_len;
+						}
+						ToArray(ret_buffer, name_len, ret_cnt);
+						ret_cnt += sizeof(u32);
+						if (name_len > 0)
+						{
+							memcpy(&ret_buffer[ret_cnt], controller.display_name.data(), name_len);
+							ret_cnt += name_len;
+						}
+					}
+					break;
+				}
+				case MsgGetPortBinding:
+				{
+					// Wire format: [u8 port]
+					if (!SafetyChecks(buf_cnt, 1, ret_cnt, 0, buf_size))
+						return error();
+					const u8 port = FromArray<u8>(&buf[buf_cnt], 0);
+					buf_cnt += 1;
+
+					std::string device_prefix;
+					std::string controller_type;
+					if (!Impl::pine_get_port_binding(port, device_prefix, controller_type))
+						return error();
+
+					const u32 prefix_len = ::narrow<u32>(device_prefix.size());
+					const u32 type_len = ::narrow<u32>(controller_type.size());
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, sizeof(u32) + prefix_len + sizeof(u32) + type_len, buf_size))
+						return error();
+
+					ToArray(ret_buffer, prefix_len, ret_cnt);
+					ret_cnt += sizeof(u32);
+					if (prefix_len > 0)
+					{
+						memcpy(&ret_buffer[ret_cnt], device_prefix.data(), prefix_len);
+						ret_cnt += prefix_len;
+					}
+
+					ToArray(ret_buffer, type_len, ret_cnt);
+					ret_cnt += sizeof(u32);
+					if (type_len > 0)
+					{
+						memcpy(&ret_buffer[ret_cnt], controller_type.data(), type_len);
+						ret_cnt += type_len;
+					}
+					break;
+				}
+				case MsgAutoMapPort:
+				{
+					// Wire format: [u8 port][u32 device_id_len][device_id]
+					if (!SafetyChecks(buf_cnt, 1 + 4, ret_cnt, 1, buf_size))
+						return error();
+					const u8 port = FromArray<u8>(&buf[buf_cnt], 0);
+					buf_cnt += 1;
+					const u32 device_id_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += sizeof(u32);
+					if (!SafetyChecks(buf_cnt, device_id_len, ret_cnt, 1, buf_size))
+						return error();
+					const std::string device_id(reinterpret_cast<const char*>(&buf[buf_cnt]), device_id_len);
+					buf_cnt += device_id_len;
+
+					const u8 status = Impl::pine_auto_map_port(port, device_id);
+					ToArray(ret_buffer, status, ret_cnt);
+					ret_cnt += 1;
+					break;
+				}
+				case MsgGetButtonBinding:
+				{
+					// Wire format: [u8 port][u32 action_len][action]
+					if (!SafetyChecks(buf_cnt, 1 + 4, ret_cnt, 0, buf_size))
+						return error();
+					const u8 port = FromArray<u8>(&buf[buf_cnt], 0);
+					buf_cnt += 1;
+					const u32 action_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += sizeof(u32);
+					if (!SafetyChecks(buf_cnt, action_len, ret_cnt, 0, buf_size))
+						return error();
+					const std::string action(reinterpret_cast<const char*>(&buf[buf_cnt]), action_len);
+					buf_cnt += action_len;
+
+					std::string binding;
+					if (!Impl::pine_get_button_binding(port, action, binding))
+						return error();
+
+					const u32 binding_len = ::narrow<u32>(binding.size());
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, sizeof(u32) + binding_len, buf_size))
+						return error();
+					ToArray(ret_buffer, binding_len, ret_cnt);
+					ret_cnt += sizeof(u32);
+					if (binding_len > 0)
+					{
+						memcpy(&ret_buffer[ret_cnt], binding.data(), binding_len);
+						ret_cnt += binding_len;
+					}
+					break;
+				}
+				case MsgSetButtonBinding:
+				{
+					// Wire format: [u8 port][u32 action_len][action][u32 binding_len][binding]
+					if (!SafetyChecks(buf_cnt, 1 + 4, ret_cnt, 1, buf_size))
+						return error();
+					const u8 port = FromArray<u8>(&buf[buf_cnt], 0);
+					buf_cnt += 1;
+
+					const u32 action_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += sizeof(u32);
+					if (!SafetyChecks(buf_cnt, action_len + 4, ret_cnt, 1, buf_size))
+						return error();
+					const std::string action(reinterpret_cast<const char*>(&buf[buf_cnt]), action_len);
+					buf_cnt += action_len;
+
+					const u32 binding_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += sizeof(u32);
+					if (!SafetyChecks(buf_cnt, binding_len, ret_cnt, 1, buf_size))
+						return error();
+					const std::string binding(reinterpret_cast<const char*>(&buf[buf_cnt]), binding_len);
+					buf_cnt += binding_len;
+
+					const u8 status = Impl::pine_set_button_binding(port, action, binding);
+					ToArray(ret_buffer, status, ret_cnt);
+					ret_cnt += 1;
+					break;
+				}
+				case MsgListPatches:
+				{
+					const auto patches = Impl::pine_list_patches();
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, sizeof(u32), buf_size))
+						return error();
+					ToArray(ret_buffer, ::narrow<u32>(patches.size()), ret_cnt);
+					ret_cnt += sizeof(u32);
+
+					for (const auto& patch : patches)
+					{
+						const u32 name_len = ::narrow<u32>(patch.name.size());
+						const u32 desc_len = ::narrow<u32>(patch.description.size());
+						const u32 place_len = ::narrow<u32>(patch.place.size());
+						if (!SafetyChecks(buf_cnt, 0, ret_cnt, sizeof(u32) + name_len + sizeof(u32) + desc_len + sizeof(u32) + place_len + 2, buf_size))
+							return error();
+
+						ToArray(ret_buffer, name_len, ret_cnt);
+						ret_cnt += sizeof(u32);
+						if (name_len > 0)
+						{
+							memcpy(&ret_buffer[ret_cnt], patch.name.data(), name_len);
+							ret_cnt += name_len;
+						}
+
+						ToArray(ret_buffer, desc_len, ret_cnt);
+						ret_cnt += sizeof(u32);
+						if (desc_len > 0)
+						{
+							memcpy(&ret_buffer[ret_cnt], patch.description.data(), desc_len);
+							ret_cnt += desc_len;
+						}
+
+						ToArray(ret_buffer, place_len, ret_cnt);
+						ret_cnt += sizeof(u32);
+						if (place_len > 0)
+						{
+							memcpy(&ret_buffer[ret_cnt], patch.place.data(), place_len);
+							ret_cnt += place_len;
+						}
+
+						ret_buffer[ret_cnt++] = patch.enabled ? 1 : 0;
+						ret_buffer[ret_cnt++] = patch.global_toggleable ? 1 : 0;
+					}
+					break;
+				}
+				case MsgSetPatchEnabled:
+				{
+					// Wire format: [u32 patch_name_len][patch_name][u8 enabled]
+					if (!SafetyChecks(buf_cnt, sizeof(u32) + 1, ret_cnt, 0, buf_size))
+						return error();
+					const u32 patch_name_len = FromArray<u32>(&buf[buf_cnt], 0);
+					buf_cnt += sizeof(u32);
+					if (!SafetyChecks(buf_cnt, patch_name_len + 1, ret_cnt, 0, buf_size))
+						return error();
+					const std::string patch_name(reinterpret_cast<const char*>(&buf[buf_cnt]), patch_name_len);
+					buf_cnt += patch_name_len;
+					const bool enabled = (FromArray<u8>(&buf[buf_cnt], 0) != 0);
+					buf_cnt += 1;
+
+					if (!Impl::pine_set_patch_enabled(patch_name, enabled))
 						return error();
 					break;
 				}
