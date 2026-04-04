@@ -13,7 +13,7 @@ usb_device_mic::usb_device_mic(u32 controller_index, const std::array<u8, 7>& lo
 	, m_controller_index(controller_index)
 	, m_mic_type(mic_type)
 	, m_sample_rate(8000)
-	, m_volume(0, 0)
+	, m_volume{0, 0}
 {
 	switch (mic_type)
 	{
