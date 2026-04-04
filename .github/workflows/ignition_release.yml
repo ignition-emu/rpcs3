@@ -121,8 +121,7 @@ jobs:
 
       - name: Compile RPCS3
         shell: pwsh
-        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets"
-
+        run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets" /p:GTestInstalled=false
 
       - name: Pack up build artifacts
         run: |
@@ -177,18 +176,8 @@ jobs:
           SHA256="${{ steps.meta.outputs.sha256 }}"
           SIZE="${{ steps.meta.outputs.size }}"
 
-          NOTES="Ignition build based on RPCS3 ${BASE_VER}
-
-          **Windows x64 (MSVC)**
-          SHA256: \`${SHA256}\`
-          Size: ${SIZE}"
-
-          FLAGS="--title 'RPCS3 Ignition ${TAG}' --notes \"${NOTES}\""
-          if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
-            FLAGS="$FLAGS --prerelease"
-          else
-            FLAGS="$FLAGS --latest"
-          fi
+          NOTES=$(printf 'Ignition build based on RPCS3 %s\n\n**Windows x64 (MSVC)**\nSHA256: `%s`\nSize: %s' \
+            "$BASE_VER" "$SHA256" "$SIZE")
 
           gh release create "${TAG}" \
             --title "RPCS3 Ignition ${TAG}" \
