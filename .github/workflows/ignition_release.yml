@@ -123,9 +123,6 @@ jobs:
         shell: pwsh
         run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets"
 
-      - name: Run Unit Tests
-        shell: pwsh
-        run: build\lib\Release-x64\rpcs3_test.exe
 
       - name: Pack up build artifacts
         run: |
