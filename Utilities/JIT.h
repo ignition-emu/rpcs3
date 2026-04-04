@@ -499,10 +499,25 @@ inline FT build_function_asm(std::string_view name, F&& builder, ::jit_runtime* 
 
 #ifdef LLVM_AVAILABLE
 
+#ifdef _MSC_VER
+#pragma warning(push, 0)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wall"
+#pragma GCC diagnostic ignored "-Wextra"
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+#include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/IR/LLVMContext.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
+
 namespace llvm
 {
-	class LLVMContext;
-	class ExecutionEngine;
 	class Module;
 	class StringRef;
 }
