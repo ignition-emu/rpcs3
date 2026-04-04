@@ -1,5 +1,9 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include "Utilities/Thread.h"
 #include "util/logs.hpp"
 #include "Emu/Memory/vm.h"
@@ -40,6 +44,30 @@ namespace IPC_socket
 		static const std::string& get_executable_hash();
 		static const std::string& get_app_version();
 		static std::string get_version_and_branch();
+		static std::string get_ipc_version_string();
+		static std::string pine_get_setting(std::string_view section, std::string_view key);
+		static bool pine_set_setting(std::string_view section, std::string_view key, std::string_view value);
+		static bool pine_apply_settings();
+		struct pine_controller_entry
+		{
+			std::string device_id;
+			std::string display_name;
+		};
+		static std::vector<pine_controller_entry> pine_list_controllers();
+		static bool pine_get_port_binding(u8 port, std::string& device_prefix, std::string& controller_type);
+		static u8 pine_auto_map_port(u8 port, std::string_view device_id);
+		static bool pine_get_button_binding(u8 port, std::string_view action_id, std::string& binding);
+		static u8 pine_set_button_binding(u8 port, std::string_view action_id, std::string_view binding);
+		struct pine_patch_entry
+		{
+			std::string name;
+			std::string description;
+			std::string place;
+			bool enabled = false;
+			bool global_toggleable = true;
+		};
+		static std::vector<pine_patch_entry> pine_list_patches();
+		static bool pine_set_patch_enabled(std::string_view patch_name, bool enabled);
 
 	public:
 		static auto constexpr thread_name = "IPC Server"sv;
