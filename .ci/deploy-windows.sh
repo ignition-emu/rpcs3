@@ -48,3 +48,4 @@ echo "$(cat "$BUILD.sha256");$(stat -c %s "$BUILD")B" > GitHubReleaseMessage.txt
 # Move files to publishing directory
 cp -- "$BUILD" "$ARTIFACT_DIR"
 cp -- "$BUILD.sha256" "$ARTIFACT_DIR"
+cp -- GitHubReleaseMessage.txt "$ARTIFACT_DIR"

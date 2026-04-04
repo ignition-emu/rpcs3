@@ -13,11 +13,19 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build_windows:
     name: "Windows"
     runs-on: windows-2025
+    outputs:
+      tag: ${{ steps.resolve_tag.outputs.value }}
+
     env:
+      # [MIRROR] Keep in sync with rpcs3.yml Windows_Build.env
       COMPILER: msvc
       QT_VER_MAIN: '6'
       QT_VER: '6.11.0'
@@ -32,10 +40,12 @@ jobs:
       CCACHE_INODECACHE: 'true'
       CCACHE_SLOPPINESS: 'time_macros'
       DEPS_CACHE_DIR: ./dependency_cache
-      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
+      # [CI BRIDGE] Maps GitHub context to CI script vars
       BUILD_REPOSITORY_NAME: ${{ github.repository }}
       BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      BUILD_PR_NUMBER: ''
       BUILD_SOURCEVERSION: ${{ github.sha }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
 
     steps:
       - name: Checkout repository
@@ -43,6 +53,21 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Resolve release tag
+        id: resolve_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate tag exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git fetch --tags
+          git rev-parse "refs/tags/${{ inputs.tag }}" || { echo "Tag '${{ inputs.tag }}' does not exist in this repo"; exit 1; }
 
       - name: Setup NuGet
         uses: nuget/setup-nuget@v2
@@ -82,8 +107,14 @@ jobs:
         run: |
           while IFS='=' read -r key val; do
             [[ -z "$key" || "$key" =~ ^# ]] && continue
-            echo "$key=$val" >> "${{ github.env }}"
+            echo "$key=$val" >> "$GITHUB_ENV"
           done < .ci/ci-vars.env
+
+      - name: Override artifact name for Ignition release
+        run: |
+          TAG="${{ steps.resolve_tag.outputs.value }}"
+          echo "BUILD=rpcs3-ignition-${TAG}-win64.7z" >> "$GITHUB_ENV"
+          echo "AVVER=${TAG}" >> "$GITHUB_ENV"
 
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@main
@@ -91,6 +122,10 @@ jobs:
       - name: Compile RPCS3
         shell: pwsh
         run: msbuild rpcs3.sln /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets"
+
+      - name: Run Unit Tests
+        shell: pwsh
+        run: build\lib\Release-x64\rpcs3_test.exe
 
       - name: Pack up build artifacts
         run: |
@@ -112,27 +147,55 @@ jobs:
     steps:
       - uses: actions/checkout@main
 
-      - name: Determine Tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download Artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./ci-artifacts/
+          name: RPCS3-windows-msvc-x64
+          path: ./artifacts/
+
+      - name: Parse release metadata
+        id: meta
+        run: |
+          TAG="${{ needs.build_windows.outputs.tag }}"
+          BASE_VER="${TAG%%-ignition*}"
+          MSG=$(cat ./artifacts/GitHubReleaseMessage.txt)
+          SHA256=$(echo "$MSG" | cut -d';' -f1)
+          SIZE=$(echo "$MSG" | cut -d';' -f2)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "base_ver=${BASE_VER}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *"-rc"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ steps.tag.outputs.value }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          BASE_VER="${{ steps.meta.outputs.base_ver }}"
+          SHA256="${{ steps.meta.outputs.sha256 }}"
+          SIZE="${{ steps.meta.outputs.size }}"
+
+          NOTES="Ignition build based on RPCS3 ${BASE_VER}
+
+          **Windows x64 (MSVC)**
+          SHA256: \`${SHA256}\`
+          Size: ${SIZE}"
+
+          FLAGS="--title 'RPCS3 Ignition ${TAG}' --notes \"${NOTES}\""
+          if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
+            FLAGS="$FLAGS --prerelease"
+          else
+            FLAGS="$FLAGS --latest"
+          fi
+
           gh release create "${TAG}" \
-            --title "${TAG}" \
-            --notes "Ignition build based on RPCS3 ${TAG%%-ignition*}" \
-            --latest \
-            ./ci-artifacts/**/*
+            --title "RPCS3 Ignition ${TAG}" \
+            --notes "${NOTES}" \
+            $([ "${{ steps.meta.outputs.prerelease }}" = "true" ] && echo "--prerelease" || echo "--latest") \
+            "./artifacts/rpcs3-ignition-${TAG}-win64.7z" \
+            "./artifacts/rpcs3-ignition-${TAG}-win64.7z.sha256"
