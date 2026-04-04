@@ -16,6 +16,13 @@ namespace IPC_socket
 	class IPC_impl
 	{
 	protected:
+		static constexpr u8 page_writable = vm::page_writable;
+
+		static bool is_aborting()
+		{
+			return thread_ctrl::state() == thread_state::aborting;
+		}
+
 		template <u32 Size = 1>
 		static bool check_addr(u32 addr, u8 flags = vm::page_readable)
 		{

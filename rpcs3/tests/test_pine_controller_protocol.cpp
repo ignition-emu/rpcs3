@@ -37,6 +37,10 @@ namespace
 		static inline std::string last_set_patch_name{};
 		static inline bool last_set_patch_enabled = false;
 
+		static constexpr u8 page_writable = 0;
+
+		static bool is_aborting() { return false; }
+
 		template <u32 Size = 1>
 		static bool check_addr(u32, u8 = 0)
 		{

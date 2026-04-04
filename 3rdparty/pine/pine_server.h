@@ -263,7 +263,7 @@ namespace pine
 					if (!SafetyChecks(buf_cnt, 1 + 4, ret_cnt, 0, buf_size))
 						return error();
 					const u32 a = FromArray<u32>(&buf[buf_cnt], 0);
-					if (!Impl::template check_addr<1>(a, vm::page_writable))
+					if (!Impl::template check_addr<1>(a, Impl::page_writable))
 						return error();
 					Impl::write8(a, FromArray<u8>(&buf[buf_cnt], 4));
 					buf_cnt += 5;
@@ -274,7 +274,7 @@ namespace pine
 					if (!SafetyChecks(buf_cnt, 2 + 4, ret_cnt, 0, buf_size))
 						return error();
 					const u32 a = FromArray<u32>(&buf[buf_cnt], 0);
-					if (!Impl::template check_addr<2>(a, vm::page_writable))
+					if (!Impl::template check_addr<2>(a, Impl::page_writable))
 						return error();
 					Impl::write16(a, FromArray<u16>(&buf[buf_cnt], 4));
 					buf_cnt += 6;
@@ -285,7 +285,7 @@ namespace pine
 					if (!SafetyChecks(buf_cnt, 4 + 4, ret_cnt, 0, buf_size))
 						return error();
 					const u32 a = FromArray<u32>(&buf[buf_cnt], 0);
-					if (!Impl::template check_addr<4>(a, vm::page_writable))
+					if (!Impl::template check_addr<4>(a, Impl::page_writable))
 						return error();
 					Impl::write32(a, FromArray<u32>(&buf[buf_cnt], 4));
 					buf_cnt += 8;
@@ -296,7 +296,7 @@ namespace pine
 					if (!SafetyChecks(buf_cnt, 8 + 4, ret_cnt, 0, buf_size))
 						return error();
 					const u32 a = FromArray<u32>(&buf[buf_cnt], 0);
-					if (!Impl::template check_addr<8>(a, vm::page_writable))
+					if (!Impl::template check_addr<8>(a, Impl::page_writable))
 						return error();
 					Impl::write64(a, FromArray<u64>(&buf[buf_cnt], 4));
 					buf_cnt += 12;
@@ -648,7 +648,7 @@ namespace pine
 
 			for (int pending_connection = 0; pending_connection != 1;)
 			{
-				if (thread_ctrl::state() == thread_state::aborting)
+				if (Impl::is_aborting())
 				{
 					return false;
 				}
@@ -700,7 +700,7 @@ namespace pine
 			if (!StartSocket())
 				return;
 
-			while (thread_ctrl::state() != thread_state::aborting)
+			while (!Impl::is_aborting())
 			{
 				// either int or ssize_t depending on the platform, so we have to
 				// use a bunch of auto
