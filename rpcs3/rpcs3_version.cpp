@@ -59,7 +59,8 @@ namespace rpcs3
 
 	bool is_release_build()
 	{
-		static constexpr bool is_release_build = std::string_view(RPCS3_GIT_FULL_BRANCH) == "RPCS3/rpcs3/master"sv;
+		static constexpr bool is_release_build = std::string_view(RPCS3_GIT_FULL_BRANCH) == "RPCS3/rpcs3/master"sv ||
+			std::string_view(RPCS3_GIT_FULL_BRANCH).starts_with("ignition-emu/rpcs3/"sv);
 		return is_release_build;
 	}
 
