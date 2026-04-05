@@ -132,6 +132,8 @@ namespace pine
 			MsgSetButtonBinding = 0x17, /**< Stage button binding change. */
 			MsgListPatches = 0x18, /**< List active-title patch catalog entries. */
 			MsgSetPatchEnabled = 0x19, /**< Enable/disable a patch by opaque patch ID. */
+			MsgPauseEmulation = 0x1A, /**< Pause emulation without suspending process execution. */
+			MsgResumeEmulation = 0x1B, /**< Resume emulation after MsgPauseEmulation. */
 			MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
 		};
 
@@ -606,6 +608,22 @@ namespace pine
 					buf_cnt += 1;
 
 					if (!Impl::pine_set_patch_enabled(patch_name, enabled))
+						return error();
+					break;
+				}
+				case MsgPauseEmulation:
+				{
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, 0, buf_size))
+						return error();
+					if (!Impl::pine_pause_emulation())
+						return error();
+					break;
+				}
+				case MsgResumeEmulation:
+				{
+					if (!SafetyChecks(buf_cnt, 0, ret_cnt, 0, buf_size))
+						return error();
+					if (!Impl::pine_resume_emulation())
 						return error();
 					break;
 				}

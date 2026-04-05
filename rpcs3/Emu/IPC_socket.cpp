@@ -758,6 +758,49 @@ namespace IPC_socket
 		return true;
 	}
 
+	bool IPC_impl::pine_pause_emulation()
+	{
+		bool ok = false;
+		Emu.BlockingCallFromMainThread([&]()
+		{
+			switch (Emu.GetStatus(false))
+			{
+			case system_state::running:
+				ok = Emu.Pause(false, false);
+				break;
+			case system_state::paused:
+				ok = true;
+				break;
+			default:
+				ok = false;
+				break;
+			}
+		});
+		return ok;
+	}
+
+	bool IPC_impl::pine_resume_emulation()
+	{
+		bool ok = false;
+		Emu.BlockingCallFromMainThread([&]()
+		{
+			switch (Emu.GetStatus(false))
+			{
+			case system_state::running:
+				ok = true;
+				break;
+			case system_state::paused:
+				Emu.Resume();
+				ok = true;
+				break;
+			default:
+				ok = false;
+				break;
+			}
+		});
+		return ok;
+	}
+
 	std::vector<IPC_impl::pine_controller_entry> IPC_impl::pine_list_controllers()
 	{
 		std::vector<pine_controller_entry> result;

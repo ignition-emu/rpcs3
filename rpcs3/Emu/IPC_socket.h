@@ -55,6 +55,8 @@ namespace IPC_socket
 		static std::string pine_get_setting(std::string_view section, std::string_view key);
 		static bool pine_set_setting(std::string_view section, std::string_view key, std::string_view value);
 		static bool pine_apply_settings();
+		static bool pine_pause_emulation();
+		static bool pine_resume_emulation();
 		struct pine_controller_entry
 		{
 			std::string device_id;
