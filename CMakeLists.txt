@@ -9,11 +9,6 @@ endif()
 
 project(rpcs3 LANGUAGES C CXX)
 
-# CMake 3.31 defaults CMP0024 to NEW; SDL3's package still includes export() targets.
-if(POLICY CMP0024)
-	cmake_policy(SET CMP0024 OLD)
-endif()
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
