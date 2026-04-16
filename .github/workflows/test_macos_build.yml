@@ -1,0 +1,83 @@
+name: Test macOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build_macos:
+    name: "macOS (${{ matrix.name }})"
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Intel
+            AARCH64: 0
+            arch: x86_64
+          - name: Apple Silicon
+            AARCH64: 1
+            arch: aarch64
+
+    env:
+      CCACHE_DIR: /tmp/ccache_dir
+      QT_VER: '6.11.0'
+      QT_VER_MAIN: '6'
+      LLVM_COMPILER_VER: '21'
+      RELEASE_MESSAGE: ../GitHubReleaseMessage.txt
+      AARCH64: ${{ matrix.AARCH64 }}
+      RUN_UNIT_TESTS: 'OFF'
+      BUILD_REPOSITORY_NAME: ${{ github.repository }}
+      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      BUILD_PR_NUMBER: ''
+      BUILD_SOURCEVERSION: ${{ github.sha }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Restore Build Ccache
+        uses: actions/cache/restore@main
+        id: restore-build-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-ccache-${{ matrix.name }}-
+
+      - name: Restore Qt Cache
+        uses: actions/cache/restore@main
+        id: restore-qt-cache
+        with:
+          path: /tmp/Qt
+          key: ${{ runner.os }}-qt-${{ matrix.name }}-${{ env.QT_VER }}
+          restore-keys: ${{ runner.os }}-qt-${{ matrix.name }}-${{ env.QT_VER }}
+
+      - name: Prepare artifact directory
+        run: mkdir -p "${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}"
+
+      - name: Build
+        run: .ci/build-mac.sh
+
+      - name: Save Build Ccache
+        if: always()
+        uses: actions/cache/save@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-build-ccache.outputs.cache-primary-key }}
+
+      - name: Save Qt Cache
+        if: always()
+        uses: actions/cache/save@main
+        with:
+          path: /tmp/Qt
+          key: ${{ steps.restore-qt-cache.outputs.cache-primary-key }}
