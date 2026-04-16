@@ -2,6 +2,11 @@ name: Test macOS Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ignition
+    paths:
+      - ".github/workflows/test_macos_build.yml"
 
 permissions:
   contents: read
