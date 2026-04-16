@@ -53,6 +53,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - name: Resolve release tag
         id: resolve_tag
@@ -62,12 +63,6 @@ jobs:
           else
             echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Validate tag exists
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          git fetch --tags
-          git rev-parse "refs/tags/${{ inputs.tag }}" || { echo "Tag '${{ inputs.tag }}' does not exist in this repo"; exit 1; }
 
       - name: Setup NuGet
         uses: nuget/setup-nuget@v2
@@ -139,52 +134,297 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+  build_linux:
+    name: "Linux (x86_64)"
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.resolve_tag.outputs.value }}
+
+    env:
+      # [MIRROR] Keep in sync with rpcs3.yml Linux_Build.env
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      DEPLOY_APPIMAGE: true
+      APPDIR: "/rpcs3/build/appdir"
+      ARTDIR: "/root/artifacts"
+      RELEASE_MESSAGE: "/rpcs3/GitHubReleaseMessage.txt"
+      COMPILER: clang
+      RUN_UNIT_TESTS: 'OFF'
+      # [CI BRIDGE] Maps GitHub context to CI script vars
+      BUILD_REPOSITORY_NAME: ${{ github.repository }}
+      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      BUILD_PR_NUMBER: ''
+      BUILD_SOURCEVERSION: ${{ github.sha }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Resolve release tag
+        id: resolve_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore build Ccache
+        uses: actions/cache/restore@main
+        id: restore-build-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-ccache-${{ env.COMPILER }}-${{ runner.arch }}-
+
+      - name: Prepare artifact directory
+        run: mkdir -p "${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}"
+
+      - name: Docker setup and build
+        run: |
+          docker pull --quiet rpcs3/rpcs3-ci-jammy:1.10
+          docker run \
+            -v $PWD:/rpcs3 \
+            --env-file .ci/docker.env \
+            -v ${{ env.CCACHE_DIR }}:/root/.ccache \
+            -v ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}:${{ env.ARTDIR }} \
+            rpcs3/rpcs3-ci-jammy:1.10 \
+            /rpcs3/.ci/build-linux.sh
+
+      - name: Rename AppImage for Ignition release
+        run: |
+          TAG="${{ steps.resolve_tag.outputs.value }}"
+          cd "${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}"
+          shopt -s nullglob
+          sources=( rpcs3-*_linux64.AppImage rpcs3-*_linux_x86_64.AppImage )
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "No AppImage produced by build-linux.sh" >&2
+            ls -la
+            exit 1
+          fi
+          SRC="${sources[0]}"
+          DST="rpcs3-ignition-${TAG}-linux_x86_64.AppImage"
+          mv "$SRC" "$DST"
+          sha256sum "$DST" | awk '{print $1}' > "${DST}.sha256"
+
+      - name: Save build Ccache
+        if: always()
+        uses: actions/cache/save@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-build-ccache.outputs.cache-primary-key }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
+        with:
+          name: RPCS3-linux-x86_64
+          path: ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}
+          compression-level: 0
+          if-no-files-found: error
+
+  build_macos:
+    name: "macOS (${{ matrix.name }})"
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Intel
+            AARCH64: 0
+            arch: x86_64
+            archive_glob: "rpcs3-*_macos.7z"
+            asset_suffix: "macos_x86_64"
+          - name: Apple Silicon
+            AARCH64: 1
+            arch: aarch64
+            archive_glob: "rpcs3-*_macos_aarch64.7z"
+            asset_suffix: "macos_aarch64"
+
+    env:
+      # [MIRROR] Keep in sync with rpcs3.yml Mac_Build.env
+      CCACHE_DIR: /tmp/ccache_dir
+      QT_VER: '6.11.0'
+      QT_VER_MAIN: '6'
+      LLVM_COMPILER_VER: '21'
+      RELEASE_MESSAGE: ../GitHubReleaseMessage.txt
+      AARCH64: ${{ matrix.AARCH64 }}
+      RUN_UNIT_TESTS: 'OFF'
+      # [CI BRIDGE] Maps GitHub context to CI script vars
+      BUILD_REPOSITORY_NAME: ${{ github.repository }}
+      BUILD_SOURCEBRANCHNAME: ${{ github.ref_name }}
+      BUILD_PR_NUMBER: ''
+      BUILD_SOURCEVERSION: ${{ github.sha }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: ${{ github.workspace }}/artifacts/
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Resolve release tag
+        id: resolve_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore Build Ccache
+        uses: actions/cache/restore@main
+        id: restore-build-ccache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-ccache-${{ matrix.name }}-
+
+      - name: Restore Qt Cache
+        uses: actions/cache/restore@main
+        id: restore-qt-cache
+        with:
+          path: /tmp/Qt
+          key: ${{ runner.os }}-qt-${{ matrix.name }}-${{ env.QT_VER }}
+          restore-keys: ${{ runner.os }}-qt-${{ matrix.name }}-${{ env.QT_VER }}
+
+      - name: Prepare artifact directory
+        run: mkdir -p "${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}"
+
+      - name: Build
+        run: .ci/build-mac.sh
+
+      - name: Rename archive for Ignition release
+        run: |
+          TAG="${{ steps.resolve_tag.outputs.value }}"
+          cd "${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}"
+          shopt -s nullglob
+          sources=( ${{ matrix.archive_glob }} )
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "No macOS archive produced by build-mac.sh" >&2
+            ls -la
+            exit 1
+          fi
+          SRC="${sources[0]}"
+          DST="rpcs3-ignition-${TAG}-${{ matrix.asset_suffix }}.7z"
+          mv "$SRC" "$DST"
+          shasum -a 256 "$DST" | awk '{print $1}' > "${DST}.sha256"
+
+      - name: Save Build Ccache
+        if: always()
+        uses: actions/cache/save@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-build-ccache.outputs.cache-primary-key }}
+
+      - name: Save Qt Cache
+        if: always()
+        uses: actions/cache/save@main
+        with:
+          path: /tmp/Qt
+          key: ${{ steps.restore-qt-cache.outputs.cache-primary-key }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
+        with:
+          name: RPCS3-macos-${{ matrix.arch }}
+          path: ${{ env.BUILD_ARTIFACTSTAGINGDIRECTORY }}
+          compression-level: 0
+          if-no-files-found: error
+
   create_release:
-    needs: build_windows
+    needs: [build_windows, build_linux, build_macos]
     name: "Create Release"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@main
 
-      - name: Download artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: RPCS3-windows-msvc-x64
-          path: ./artifacts/
+          path: ./artifacts-by-job/
+          pattern: "RPCS3-*"
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p ./artifacts
+          find ./artifacts-by-job -type f -exec cp -v {} ./artifacts/ \;
+          ls -la ./artifacts
 
       - name: Parse release metadata
         id: meta
         run: |
           TAG="${{ needs.build_windows.outputs.tag }}"
           BASE_VER="${TAG%%-ignition*}"
-          MSG=$(cat ./artifacts/GitHubReleaseMessage.txt)
-          SHA256=$(echo "$MSG" | cut -d';' -f1)
-          SIZE=$(echo "$MSG" | cut -d';' -f2)
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "base_ver=${BASE_VER}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
-          echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
           if [[ "$TAG" == *"-rc"* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Build release notes
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          BASE_VER="${{ steps.meta.outputs.base_ver }}"
+          cd ./artifacts
+          {
+            echo "Ignition build based on RPCS3 ${BASE_VER}"
+            echo ""
+            for f in \
+                "rpcs3-ignition-${TAG}-win64.7z" \
+                "rpcs3-ignition-${TAG}-linux_x86_64.AppImage" \
+                "rpcs3-ignition-${TAG}-macos_x86_64.7z" \
+                "rpcs3-ignition-${TAG}-macos_aarch64.7z"; do
+              [ -f "$f" ] || continue
+              HASH=$(sha256sum "$f" | awk '{print $1}')
+              SIZE=$(stat -c %s "$f")
+              echo "**${f}**"
+              echo "SHA256: \`${HASH}\`"
+              echo "Size: ${SIZE}B"
+              echo ""
+            done
+          } > ../release_notes.md
+          cat ../release_notes.md
+
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
-          BASE_VER="${{ steps.meta.outputs.base_ver }}"
-          SHA256="${{ steps.meta.outputs.sha256 }}"
-          SIZE="${{ steps.meta.outputs.size }}"
-
-          NOTES=$(printf 'Ignition build based on RPCS3 %s\n\n**Windows x64 (MSVC)**\nSHA256: `%s`\nSize: %s' \
-            "$BASE_VER" "$SHA256" "$SIZE")
-
-          gh release create "${TAG}" \
-            --title "RPCS3 Ignition ${TAG}" \
-            --notes "${NOTES}" \
-            $([ "${{ steps.meta.outputs.prerelease }}" = "true" ] && echo "--prerelease" || echo "--latest") \
-            "./artifacts/rpcs3-ignition-${TAG}-win64.7z" \
-            "./artifacts/rpcs3-ignition-${TAG}-win64.7z.sha256"
+          cd ./artifacts
+          shopt -s nullglob
+          ASSETS=()
+          for base in \
+              "rpcs3-ignition-${TAG}-win64.7z" \
+              "rpcs3-ignition-${TAG}-linux_x86_64.AppImage" \
+              "rpcs3-ignition-${TAG}-macos_x86_64.7z" \
+              "rpcs3-ignition-${TAG}-macos_aarch64.7z"; do
+            [ -f "$base" ] && ASSETS+=("$base")
+            [ -f "${base}.sha256" ] && ASSETS+=("${base}.sha256")
+          done
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No release assets produced" >&2
+            exit 1
+          fi
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; uploading assets with --clobber."
+            gh release upload "${TAG}" "${ASSETS[@]}" --clobber
+          else
+            if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
+              PRERELEASE_FLAG=--prerelease
+            else
+              PRERELEASE_FLAG=--latest
+            fi
+            gh release create "${TAG}" \
+              --title "RPCS3 Ignition ${TAG}" \
+              --notes-file "../release_notes.md" \
+              "${PRERELEASE_FLAG}" \
+              "${ASSETS[@]}"
+          fi
