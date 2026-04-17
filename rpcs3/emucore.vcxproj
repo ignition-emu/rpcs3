@@ -549,6 +549,7 @@
     <ClCompile Include="Loader\ELF.cpp" />
     <ClCompile Include="Loader\PSF.cpp" />
     <ClCompile Include="Loader\PUP.cpp" />
+    <ClCompile Include="Loader\PUP_install.cpp" />
     <ClCompile Include="Loader\TAR.cpp" />
     <ClCompile Include="Loader\ISO.cpp" />
     <ClCompile Include="Loader\mself.cpp" />
@@ -1039,6 +1040,7 @@
     <ClInclude Include="Loader\ELF.h" />
     <ClInclude Include="Loader\PSF.h" />
     <ClInclude Include="Loader\PUP.h" />
+    <ClInclude Include="Loader\PUP_install.h" />
     <ClInclude Include="Loader\TAR.h" />
     <ClInclude Include="Loader\ISO.h" />
     <ClInclude Include="Loader\TROPUSR.h" />

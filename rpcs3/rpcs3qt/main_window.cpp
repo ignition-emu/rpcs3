@@ -77,6 +77,7 @@
 #include "Crypto/decrypt_binaries.h"
 
 #include "Loader/PUP.h"
+#include "Loader/PUP_install.h"
 #include "Loader/TAR.h"
 #include "Loader/PSF.h"
 #include "Loader/ISO.h"
@@ -1401,280 +1402,130 @@ void main_window::HandlePupInstallation(const QString& file_path, const QString&
 		return;
 	}
 
-	Emu.GracefulShutdown(false);
-
 	m_gui_settings->SetValue(gui::fd_install_pup, QFileInfo(file_path).path());
 
-	const std::string path = file_path.toStdString();
+	std::unique_ptr<progress_dialog> pdlg;
 
-	fs::file pup_f(path);
-	if (!pup_f)
+	pup_install_callbacks cb;
+	cb.confirm_old_firmware = [this](std::string_view incoming, std::string_view latest)
 	{
-		gui_log.error("Error opening PUP file %s (%s)", path, fs::g_tls_error);
+		return QMessageBox::question(this, tr("RPCS3 Firmware Installer"),
+			tr("Old firmware detected.\nThe newest firmware version is %1 and you are trying to install version %2\nContinue installation?")
+				.arg(QString::fromUtf8(latest.data(), ::size32(latest)), QString::fromUtf8(incoming.data(), ::size32(incoming))),
+			QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes;
+	};
+	cb.confirm_reinstall = [this](std::string_view installed, std::string_view incoming)
+	{
+		return QMessageBox::question(this, tr("RPCS3 Firmware Installer"),
+			tr("Firmware of version %1 has already been installed.\nOverwrite current installation with version %2?")
+				.arg(QString::fromUtf8(installed.data(), ::size32(installed)), QString::fromUtf8(incoming.data(), ::size32(incoming))),
+			QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes;
+	};
+	cb.on_install_starting = [&, this](u64 total)
+	{
+		// Remove possibly PS3 fonts from database so they can be overwritten.
+		QFontDatabase::removeAllApplicationFonts();
+
+		pdlg = std::make_unique<progress_dialog>(
+			tr("RPCS3 Firmware Installer"),
+			tr("Installing firmware...\nPlease wait..."),
+			tr("Cancel"), 0, static_cast<int>(total), false, this);
+		pdlg->show();
+	};
+	cb.on_progress = [&](u64 current, u64 total)
+	{
+		if (pdlg)
+		{
+			if (pdlg->maximum() != static_cast<int>(total))
+			{
+				pdlg->setMaximum(static_cast<int>(total));
+			}
+			pdlg->SetValue(static_cast<int>(current));
+		}
+		QCoreApplication::processEvents();
+	};
+	cb.is_cancelled = [&]()
+	{
+		return pdlg && pdlg->wasCanceled();
+	};
+
+	std::string version_out;
+	std::string detail_out;
+	const pup_install_result result = install_pup(file_path.toStdString(), dir_path.toStdString(), cb, &version_out, &detail_out);
+
+	// Update with newly installed PS3 fonts (no-op if none were loaded / nothing changed).
+	Q_EMIT RequestGlobalStylesheetChange();
+
+	switch (result)
+	{
+	case pup_install_result::ok:
+		break;
+	case pup_install_result::cancelled:
+	case pup_install_result::firmware_exists_no_force:
+		// User cancelled — no error dialog.
+		return;
+	case pup_install_result::path_empty:
+		critical(tr("Firmware installation failed: The provided path is empty."));
+		return;
+	case pup_install_result::open_failed:
 		critical(tr("Firmware installation failed: The selected firmware file couldn't be opened."));
 		return;
-	}
-
-	pup_object pup(std::move(pup_f));
-
-	switch (pup.operator pup_error())
-	{
-	case pup_error::header_read:
-	{
-		gui_log.error("%s", pup.get_formatted_error());
+	case pup_install_result::header_read:
 		critical(tr("Firmware installation failed: The provided file is empty."));
 		return;
-	}
-	case pup_error::header_magic:
-	{
-		gui_log.error("Error while installing firmware: provided file is not a PUP file.");
+	case pup_install_result::header_magic:
 		critical(tr("Firmware installation failed: The provided file is not a PUP file."));
 		return;
-	}
-	case pup_error::expected_size:
-	{
-		gui_log.error("%s", pup.get_formatted_error());
+	case pup_install_result::expected_size:
 		critical(tr("Firmware installation failed: The provided file is incomplete. Try redownloading it."));
 		return;
-	}
-	case pup_error::header_file_count:
-	case pup_error::file_entries:
-	case pup_error::stream:
-	{
-		std::string error = "Error while installing firmware: PUP file is invalid.";
-
-		if (!pup.get_formatted_error().empty())
-		{
-			fmt::append(error, "\n%s", pup.get_formatted_error());
-		}
-
-		gui_log.error("%s", error);
+	case pup_install_result::file_entries:
 		critical(tr("Firmware installation failed: The provided file is corrupted."));
 		return;
-	}
-	case pup_error::hash_mismatch:
-	{
-		gui_log.error("Error while installing firmware: Hash check failed.");
+	case pup_install_result::hash_mismatch:
 		critical(tr("Firmware installation failed: The provided file's contents are corrupted."));
 		return;
-	}
-	case pup_error::ok: break;
-	}
-
-	fs::file update_files_f = pup.get_file(0x300);
-
-	const usz update_files_size = update_files_f ? update_files_f.size() : 0;
-
-	if (!update_files_size)
-	{
-		gui_log.error("Error while installing firmware: Couldn't find installation packages database.");
+	case pup_install_result::no_update_db:
+	case pup_install_result::no_dev_flash_entries:
+	case pup_install_result::no_version:
 		critical(tr("Firmware installation failed: The provided file's contents are corrupted."));
 		return;
-	}
-
-	fs::device_stat dev_stat{};
-	if (!fs::statfs(g_cfg_vfs.get_dev_flash(), dev_stat))
-	{
-		gui_log.error("Error while installing firmware: Couldn't retrieve available disk space. ('%s')", g_cfg_vfs.get_dev_flash());
+	case pup_install_result::statfs_failed:
 		critical(tr("Firmware installation failed: Couldn't retrieve available disk space."));
 		return;
-	}
-
-	if (dev_stat.avail_free < update_files_size)
-	{
-		gui_log.error("Error while installing firmware: Out of disk space. ('%s', needed: %d bytes)", g_cfg_vfs.get_dev_flash(), update_files_size - dev_stat.avail_free);
+	case pup_install_result::disk_full:
 		critical(tr("Firmware installation failed: Out of disk space."));
 		return;
+	case pup_install_result::mount_failed:
+		critical(tr("Firmware extraction failed: VFS mounting failed."));
+		return;
+	case pup_install_result::decrypt_failed:
+		critical(tr("Firmware installation failed: Firmware could not be decompressed"));
+		return;
+	case pup_install_result::extract_failed:
+		critical(tr("The firmware contents could not be extracted."
+			"\nThis is very likely caused by external interference from a faulty anti-virus software."
+			"\nPlease add RPCS3 to your anti-virus' whitelist or use better anti-virus software."));
+		return;
 	}
 
-	tar_object update_files(update_files_f);
-
+	// Extract-only succeeds silently beyond the log line inside install_pup().
 	if (!dir_path.isEmpty())
 	{
-		// Extract only mode, extract direct TAR entries to a user directory
-
-		if (!vfs::mount("/pup_extract", dir_path.toStdString() + '/'))
-		{
-			gui_log.error("Error while extracting firmware: Failed to mount '%s'", dir_path);
-			critical(tr("Firmware extraction failed: VFS mounting failed."));
-			return;
-		}
-
-		if (!update_files.extract("/pup_extract", true))
-		{
-			gui_log.error("Error while installing firmware: TAR contents are invalid.");
-			critical(tr("Firmware installation failed: Firmware contents could not be extracted."));
-		}
-
-		gui_log.success("Extracted PUP file to %s", dir_path);
 		return;
 	}
 
-	// In regular installation we select specfic entries from the main TAR which are prefixed with "dev_flash_"
-	// Those entries are TAR as well, we extract their packed files from them and that's what installed in /dev_flash
-
-	auto update_filenames = update_files.get_filenames();
-
-	update_filenames.erase(std::remove_if(
-		update_filenames.begin(), update_filenames.end(), [](const std::string& s) { return s.find("dev_flash_") == umax; }),
-		update_filenames.end());
-
-	if (update_filenames.empty())
+	if (pdlg)
 	{
-		gui_log.error("Error while installing firmware: No dev_flash_* packages were found.");
-		critical(tr("Firmware installation failed: The provided file's contents are corrupted."));
-		return;
-	}
-
-	static constexpr std::string_view cur_version = "4.93";
-
-	std::string version_string;
-
-	if (fs::file version = pup.get_file(0x100))
-	{
-		version_string = version.to_string();
-	}
-
-	if (const usz version_pos = version_string.find('\n'); version_pos != umax)
-	{
-		version_string.erase(version_pos);
-	}
-
-	if (version_string.empty())
-	{
-		gui_log.error("Error while installing firmware: No version data was found.");
-		critical(tr("Firmware installation failed: The provided file's contents are corrupted."));
-		return;
-	}
-
-	if (version_string < cur_version &&
-		QMessageBox::question(this, tr("RPCS3 Firmware Installer"), tr("Old firmware detected.\nThe newest firmware version is %1 and you are trying to install version %2\nContinue installation?").arg(QString::fromUtf8(cur_version.data(), ::size32(cur_version)), QString::fromStdString(version_string)),
-			QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::No)
-	{
-		return;
-	}
-
-	if (const std::string installed = utils::get_firmware_version(); !installed.empty())
-	{
-		gui_log.warning("Reinstalling firmware: old=%s, new=%s", installed, version_string);
-
-		if (QMessageBox::question(this, tr("RPCS3 Firmware Installer"), tr("Firmware of version %1 has already been installed.\nOverwrite current installation with version %2?").arg(QString::fromStdString(installed), QString::fromStdString(version_string)),
-			QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::No)
-		{
-			gui_log.warning("Reinstallation of firmware aborted.");
-			return;
-		}
-	}
-
-	// Remove possibly PS3 fonts from database
-	QFontDatabase::removeAllApplicationFonts();
-
-	progress_dialog pdlg(tr("RPCS3 Firmware Installer"), tr("Installing firmware version %1\nPlease wait...").arg(QString::fromStdString(version_string)), tr("Cancel"), 0, static_cast<int>(update_filenames.size()), false, this);
-	pdlg.show();
-
-	// Used by tar_object::extract() as destination directory
-	vfs::mount("/dev_flash", g_cfg_vfs.get_dev_flash());
-
-	// Synchronization variable
-	atomic_t<uint> progress(0);
-	{
-		// Run asynchronously
-		named_thread worker("Firmware Installer", [&]
-		{
-			for (const auto& update_filename : update_filenames)
-			{
-				auto update_file_stream = update_files.get_file(update_filename);
-
-				if (update_file_stream->m_file_handler)
-				{
-					// Forcefully read all the data
-					update_file_stream->m_file_handler->handle_file_op(*update_file_stream, 0, update_file_stream->get_size(umax), nullptr);
-				}
-
-				fs::file update_file = fs::make_stream(std::move(update_file_stream->data));
-
-				SCEDecrypter self_dec(update_file);
-				self_dec.LoadHeaders();
-				self_dec.LoadMetadata(SCEPKG_ERK, SCEPKG_RIV);
-				self_dec.DecryptData();
-
-				auto dev_flash_tar_f = self_dec.MakeFile();
-				if (dev_flash_tar_f.size() < 3)
-				{
-					gui_log.error("Error while installing firmware: PUP contents are invalid.");
-					critical(tr("Firmware installation failed: Firmware could not be decompressed"));
-					progress = -1;
-					return;
-				}
-
-				tar_object dev_flash_tar(dev_flash_tar_f[2]);
-				if (!dev_flash_tar.extract())
-				{
-					gui_log.error("Error while installing firmware: TAR contents are invalid. (package=%s)", update_filename);
-					critical(tr("The firmware contents could not be extracted."
-						"\nThis is very likely caused by external interference from a faulty anti-virus software."
-						"\nPlease add RPCS3 to your anti-virus\' whitelist or use better anti-virus software."));
-
-					progress = -1;
-					return;
-				}
-
-				if (!progress.try_inc(::narrow<uint>(update_filenames.size())))
-				{
-					// Installation was cancelled
-					return;
-				}
-			}
-		});
-
-		// Wait for the completion
-		qt_events_aware_op(5, [&]()
-		{
-			const uint value = progress.load();
-
-			if (value >= update_filenames.size())
-			{
-				return true;
-			}
-
-			if (pdlg.wasCanceled())
-			{
-				progress = -1;
-				return true;
-			}
-
-			// Update progress window
-			pdlg.SetValue(static_cast<int>(value));
-			return false;
-		});
-
-		// Join thread
-		worker();
-	}
-
-	update_files_f.close();
-
-	if (progress == update_filenames.size())
-	{
-		pdlg.SetValue(pdlg.maximum());
+		pdlg->SetValue(pdlg->maximum());
 		std::this_thread::sleep_for(100ms);
 	}
 
-	// Update with newly installed PS3 fonts
-	Q_EMIT RequestGlobalStylesheetChange();
+	ui->bootVSHAct->setEnabled(fs::is_file(g_cfg_vfs.get_dev_flash() + "/vsh/module/vsh.self"));
 
-	// Unmount
-	Emu.Init();
+	m_gui_settings->ShowInfoBox(tr("Success!"), tr("Successfully installed PS3 firmware and LLE Modules!"), gui::ib_pup_success, this);
 
-	if (progress == update_filenames.size())
-	{
-		ui->bootVSHAct->setEnabled(fs::is_file(g_cfg_vfs.get_dev_flash() + "/vsh/module/vsh.self"));
-
-		gui_log.success("Successfully installed PS3 firmware version %s.", version_string);
-		m_gui_settings->ShowInfoBox(tr("Success!"), tr("Successfully installed PS3 firmware and LLE Modules!"), gui::ib_pup_success, this);
-
-		CreateFirmwareCache();
-	}
+	CreateFirmwareCache();
 }
 
 void main_window::DecryptSPRXLibraries()

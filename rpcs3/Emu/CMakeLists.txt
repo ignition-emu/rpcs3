@@ -124,6 +124,7 @@ target_sources(rpcs3_emu PRIVATE
     ../Loader/mself.cpp
     ../Loader/PSF.cpp
     ../Loader/PUP.cpp
+    ../Loader/PUP_install.cpp
     ../Loader/TAR.cpp
     ../Loader/ISO.cpp
     ../Loader/TROPUSR.cpp

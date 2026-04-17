@@ -71,6 +71,7 @@ DYNAMIC_IMPORT("ntdll.dll", NtSetTimerResolution, NTSTATUS(ULONG DesiredResoluti
 #include "Emu/system_config.h"
 #include "Emu/system_utils.hpp"
 #include "Emu/RSX/Overlays/overlay_message.h"
+#include "Loader/PUP_install.h"
 #include <thread>
 #include <charconv>
 
@@ -397,6 +398,7 @@ constexpr auto arg_updating     = "updating";
 constexpr auto arg_user_id      = "user-id";
 constexpr auto arg_installfw    = "installfw";
 constexpr auto arg_installpkg   = "installpkg";
+constexpr auto arg_firmware_force = "firmware-force"; // headless firmware install: auto-confirm reinstall and old-firmware prompts
 constexpr auto arg_savestate    = "savestate";
 constexpr auto arg_rsx_capture  = "rsx-capture";
 constexpr auto arg_timer        = "high-res-timer";
@@ -433,7 +435,8 @@ QCoreApplication* create_application(std::span<char* const> qt_argv)
 	static char** const s_argv = const_cast<char**>(qt_argv.data());
 
 	if (find_arg(arg_headless, qt_argv) != -1 ||
-		find_arg(arg_decrypt, qt_argv) != -1)
+		find_arg(arg_decrypt, qt_argv) != -1 ||
+		(find_arg(arg_installfw, qt_argv) != -1 && find_arg(arg_no_gui, qt_argv) != -1))
 	{
 		return new headless_application(s_argc, s_argv);
 	}
@@ -814,6 +817,7 @@ int run_rpcs3(int argc, char** argv)
 	parser.addOption(installfw_option);
 	const QCommandLineOption installpkg_option(arg_installpkg, "Forces the emulator to install this pkg file.", "path", "");
 	parser.addOption(installpkg_option);
+	parser.addOption(QCommandLineOption(arg_firmware_force, "When used with --installfw in --no-gui mode, auto-confirm reinstall and old-firmware prompts."));
 	const QCommandLineOption decrypt_option(arg_decrypt, "Decrypt PS3 binaries.", "path(s)", "");
 	parser.addOption(decrypt_option);
 	const QCommandLineOption user_id_option(arg_user_id, "Start RPCS3 as this user.", "user id", "");
@@ -1129,6 +1133,123 @@ int run_rpcs3(int argc, char** argv)
 	// Force install firmware or pkg first if specified through command-line
 	if (parser.isSet(arg_installfw) || parser.isSet(arg_installpkg))
 	{
+		// Headless firmware install: invoked as `rpcs3 --no-gui --installfw <path>`.
+		// Exit codes:
+		//   0  ok
+		//   10 bad/corrupt/missing PUP
+		//   11 disk full / statfs failed
+		//   12 firmware already installed, --firmware-force not passed
+		//   13 extract/decrypt failure
+		//   20 internal error (wrong mode, unknown failure)
+		if (qobject_cast<headless_application*>(app.data()))
+		{
+			if (parser.isSet(arg_installpkg))
+			{
+				sys_log.error("--installpkg is not supported in no-gui mode.");
+				std::fprintf(stderr, "ERROR: --installpkg is not supported in no-gui mode.\n");
+				Emu.Quit(true);
+				return 20;
+			}
+
+			const std::string pup_path = parser.value(installfw_option).toStdString();
+			const bool force = parser.isSet(arg_firmware_force);
+
+			pup_install_callbacks cb;
+			cb.confirm_old_firmware = [force](std::string_view incoming, std::string_view latest)
+			{
+				sys_log.warning("Firmware install: incoming version %s is older than latest known %s (force=%d).",
+					std::string(incoming), std::string(latest), force ? 1 : 0);
+				return force;
+			};
+			cb.confirm_reinstall = [force](std::string_view installed, std::string_view incoming)
+			{
+				sys_log.warning("Firmware install: firmware %s already present; installing %s (force=%d).",
+					std::string(installed), std::string(incoming), force ? 1 : 0);
+				return force;
+			};
+			cb.on_install_starting = [](u64 total)
+			{
+				sys_log.notice("Firmware install: starting extraction of %d package(s).", total);
+				std::fprintf(stderr, "Installing firmware: %llu package(s)...\n", static_cast<unsigned long long>(total));
+			};
+			cb.on_progress = [last_pct = std::make_shared<int>(-1)](u64 current, u64 total)
+			{
+				if (!total) return;
+				const int pct = static_cast<int>((current * 100) / total);
+				if (pct != *last_pct)
+				{
+					*last_pct = pct;
+					std::fprintf(stderr, "Firmware install progress: %d%% (%llu/%llu)\n",
+						pct,
+						static_cast<unsigned long long>(current),
+						static_cast<unsigned long long>(total));
+				}
+			};
+			// is_cancelled left null: headless install is not user-cancellable.
+
+			std::string version_out;
+			std::string detail_out;
+			const pup_install_result result = install_pup(pup_path, {}, cb, &version_out, &detail_out);
+
+			int exit_code = 20;
+			switch (result)
+			{
+			case pup_install_result::ok:
+				sys_log.success("Firmware install: OK (version %s).", version_out);
+				std::fprintf(stderr, "OK: installed firmware version %s\n", version_out.c_str());
+				exit_code = 0;
+				break;
+			case pup_install_result::cancelled:
+				std::fprintf(stderr, "ERROR: firmware install was cancelled.\n");
+				exit_code = 20;
+				break;
+			case pup_install_result::firmware_exists_no_force:
+				std::fprintf(stderr,
+					"ERROR: firmware already installed. Pass --firmware-force to overwrite.%s%s\n",
+					detail_out.empty() ? "" : " Detail: ",
+					detail_out.c_str());
+				exit_code = 12;
+				break;
+			case pup_install_result::path_empty:
+			case pup_install_result::open_failed:
+			case pup_install_result::header_read:
+			case pup_install_result::header_magic:
+			case pup_install_result::expected_size:
+			case pup_install_result::file_entries:
+			case pup_install_result::hash_mismatch:
+			case pup_install_result::no_update_db:
+			case pup_install_result::no_dev_flash_entries:
+			case pup_install_result::no_version:
+				std::fprintf(stderr, "ERROR: bad or corrupt PUP (%s).%s%s\n",
+					pup_install_result_to_string(result),
+					detail_out.empty() ? "" : " Detail: ",
+					detail_out.c_str());
+				exit_code = 10;
+				break;
+			case pup_install_result::statfs_failed:
+			case pup_install_result::disk_full:
+				std::fprintf(stderr, "ERROR: disk problem (%s).%s%s\n",
+					pup_install_result_to_string(result),
+					detail_out.empty() ? "" : " Detail: ",
+					detail_out.c_str());
+				exit_code = 11;
+				break;
+			case pup_install_result::mount_failed:
+			case pup_install_result::extract_failed:
+			case pup_install_result::decrypt_failed:
+				std::fprintf(stderr, "ERROR: extraction/decrypt failure (%s).%s%s\n",
+					pup_install_result_to_string(result),
+					detail_out.empty() ? "" : " Detail: ",
+					detail_out.c_str());
+				exit_code = 13;
+				break;
+			}
+
+			std::fflush(stderr);
+			Emu.Quit(true);
+			return exit_code;
+		}
+
 		if (auto gui_app = qobject_cast<gui_application*>(app.data()))
 		{
 			if (s_no_gui)

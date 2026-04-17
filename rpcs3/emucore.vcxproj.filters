@@ -798,6 +798,9 @@
     <ClCompile Include="Loader\PUP.cpp">
       <Filter>Loader</Filter>
     </ClCompile>
+    <ClCompile Include="Loader\PUP_install.cpp">
+      <Filter>Loader</Filter>
+    </ClCompile>
     <ClCompile Include="Loader\TAR.cpp">
       <Filter>Loader</Filter>
     </ClCompile>
@@ -2014,6 +2017,9 @@
       <Filter>Emu\Cell\Modules</Filter>
     </ClInclude>
     <ClInclude Include="Loader\PUP.h">
+      <Filter>Loader</Filter>
+    </ClInclude>
+    <ClInclude Include="Loader\PUP_install.h">
       <Filter>Loader</Filter>
     </ClInclude>
     <ClInclude Include="Loader\TAR.h">
