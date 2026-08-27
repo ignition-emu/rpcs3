@@ -16,9 +16,11 @@
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 #include "util/video_source.h"
 
+#include <chrono>
 #include <cstdio>
 #include <deque>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 // rpcs3_emu calls this and leaves the frontend to define it. The GUI logs it to
@@ -191,3 +193,22 @@ int32_t ignition_ps3_save_state(ignition_ps3*, const char*) { return -1; }
 int32_t ignition_ps3_load_state(ignition_ps3*, const char*) { return -1; }
 
 } // extern "C"
+
+// The emu (Emu/System.cpp) calls this in its boot and pause loops to run an op
+// while keeping the frontend responsive; RPCS3's GUI pumps Qt events here. Ours
+// drains the call_from_main_thread queue instead, so it needs no Qt. C++
+// linkage, matching the declaration in Emu/System.cpp.
+void qt_events_aware_op(int repeat_duration_ms, std::function<bool()> wrapped_op)
+{
+	while (wrapped_op())
+	{
+		if (g_inst)
+		{
+			ignition_ps3_pump(g_inst);
+		}
+		if (repeat_duration_ms > 0)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(repeat_duration_ms));
+		}
+	}
+}

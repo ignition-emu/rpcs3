@@ -4,6 +4,35 @@
 # Ignition host, the same arm's-length arrangement the libretro cores use.
 add_library(rpcs3_ignition SHARED
 	ignition_ps3.cpp
+
+	# Version glue the emu references.
+	${CMAKE_CURRENT_SOURCE_DIR}/../rpcs3_version.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../stdafx.cpp
+
+	# The pad/Input system the emu calls into. It lives in rpcs3_ui (the Qt GUI
+	# lib) upstream; compiled here directly so the module links QtCore/QtGui but
+	# not the GUI. gui_pad_thread and the camera sinks are left out -- pad_thread
+	# does not reference them and they pull QtMultimedia/Widgets.
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/pad_thread.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/product_info.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ds3_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ds4_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/dualsense_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/skateboard_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/hid_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/sdl_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/sdl_instance.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ps_move_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ps_move_config.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ps_move_calibration.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ps_move_tracker.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/evdev_joystick_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/xinput_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/mm_joystick_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/keyboard_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/basic_keyboard_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/raw_mouse_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/raw_mouse_config.cpp
 )
 
 # rpcs3_emu propagates its own PUBLIC includes; this is for ignition_ps3.h and
@@ -28,6 +57,8 @@ target_link_libraries(rpcs3_ignition
 		3rdparty::zlib
 		3rdparty::opencv
 		3rdparty::fusion
+		Qt6::Core
+		Qt6::Gui
 )
 
 if(WIN32)
@@ -37,7 +68,7 @@ else()
 endif()
 
 if(APPLE)
-	target_link_libraries(rpcs3_ignition PRIVATE iconv)
+	target_link_libraries(rpcs3_ignition PRIVATE iconv "-framework CoreVideo" "-framework Foundation")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_link_libraries(rpcs3_ignition PRIVATE rt)
 endif()
@@ -45,6 +76,7 @@ endif()
 target_compile_features(rpcs3_ignition PRIVATE cxx_std_23)
 
 set_target_properties(rpcs3_ignition PROPERTIES
+	AUTOMOC ON
 	CXX_VISIBILITY_PRESET hidden
 	VISIBILITY_INLINES_HIDDEN ON
 )
