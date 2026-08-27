@@ -42,6 +42,8 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_link_libraries(rpcs3_ignition PRIVATE rt)
 endif()
 
+target_compile_features(rpcs3_ignition PRIVATE cxx_std_23)
+
 set_target_properties(rpcs3_ignition PROPERTIES
 	CXX_VISIBILITY_PRESET hidden
 	VISIBILITY_INLINES_HIDDEN ON
