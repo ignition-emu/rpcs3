@@ -34,8 +34,6 @@ add_library(rpcs3_ignition SHARED
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/evdev_joystick_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/xinput_pad_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/mm_joystick_handler.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/../Input/keyboard_pad_handler.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/../Input/basic_keyboard_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/raw_mouse_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/raw_mouse_config.cpp
 )
@@ -79,6 +77,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 target_compile_features(rpcs3_ignition PRIVATE cxx_std_23)
+target_compile_definitions(rpcs3_ignition PRIVATE IGNITION_EMBED)
 
 set_target_properties(rpcs3_ignition PROPERTIES
 	AUTOMOC ON
