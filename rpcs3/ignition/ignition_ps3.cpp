@@ -15,6 +15,7 @@
 #include "Emu/Cell/Modules/cellSaveData.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 #include "util/video_source.h"
+#include "Emu/Io/pad_config.h"
 
 #include <chrono>
 #include <cstdio>
@@ -25,6 +26,11 @@
 
 // rpcs3_emu calls this and leaves the frontend to define it. The GUI logs it to
 // a dialog; here it goes to stderr, which is where a host running headless looks.
+// Globals the emu and pad system read, defined in RPCS3's app main (rpcs3.cpp)
+// which the module replaces.
+cfg_input_configurations g_cfg_input_configs;
+std::string g_input_config_override;
+
 [[noreturn]] void report_fatal_error(std::string_view text, bool /*is_html*/ = false, bool /*include_help*/ = true)
 {
 	std::fprintf(stderr, "[rpcs3 fatal] %.*s\n", static_cast<int>(text.size()), text.data());
