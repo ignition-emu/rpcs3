@@ -14,6 +14,7 @@
 #include "Emu/Cell/Modules/cellOskDialog.h"
 #include "Emu/Cell/Modules/cellSaveData.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
+#include "util/video_source.h"
 
 #include <cstdio>
 #include <deque>
