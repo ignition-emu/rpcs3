@@ -1,4 +1,9 @@
 # The Ignition PS3 embed module: a Qt-free shared library over rpcs3_emu,
+
+# Qt is set up inside rpcs3/CMakeLists.txt, not at top level where this subdir
+# is added, so find it here for AUTOMOC and the Qt6::* targets. Qt6_DIR is in
+# the build environment already.
+find_package(Qt6 COMPONENTS Core Gui REQUIRED)
 # exporting the C ABI in ignition_ps3.h. Built only when WITH_IGNITION is ON,
 # and never linked into the RPCS3 executable -- it is loaded at runtime by the
 # Ignition host, the same arm's-length arrangement the libretro cores use.
