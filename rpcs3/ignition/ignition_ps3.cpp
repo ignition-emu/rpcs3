@@ -19,6 +19,7 @@
 #include "Emu/Cell/Modules/cellSaveData.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 #include "util/video_source.h"
+#include "util/video_provider.h"
 #include "Emu/Io/pad_config.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/MouseHandler.h"
@@ -94,8 +95,17 @@ namespace
 	}
 }
 
+// A hidden, off-screen Metal surface (ignition_metal.mm) and RPCS3's recording
+// flag, both driven module-side so the Vulkan path renders with no window and
+// hands frames back through present_frame -- no changes to the emulator.
+extern "C" void* ignition_make_hidden_metal_view(int width, int height);
+extern atomic_t<recording_mode> g_recording_mode;
+
 struct ignition_ps3
 {
+	// A window-less NSView+CAMetalLayer RPCS3 renders into (see handle()).
+	void* metal_view = nullptr;
+
 	std::mutex mtx;
 	// call_from_main_thread work, drained by the host each pump().
 	std::deque<std::pair<std::function<void()>, atomic_t<u32>*>> work;
@@ -137,7 +147,7 @@ public:
 	f64 client_display_rate() override { return 60.0; }
 	bool has_alpha() override { return false; }
 
-	display_handle_t handle() const override { return {}; }
+	display_handle_t handle() const override;
 
 	// Always consume: this is what makes the RSX read the frame back and call
 	// present_frame every flip instead of only while recording.
@@ -264,9 +274,9 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 
 	cb.init_gs_render = [](utils::serial* ar)
 	{
-		// Milestone: null renderer (headless, no frames). The Vulkan hidden-
-		// surface video path is the next increment.
-		g_fxo->init<rsx::thread, named_thread<NullGSRender>>(ar);
+		// The embed always renders on Vulkan (into the hidden Metal surface);
+		// the null renderer produces no frames, so there is nothing else to pick.
+		g_fxo->init<rsx::thread, named_thread<VKGSRender>>(ar);
 	};
 	cb.get_gs_frame          = []() -> std::unique_ptr<GSFrameBase> { return std::make_unique<ignition_gs_frame>(); };
 	cb.close_gs_frame        = []() {};
@@ -363,6 +373,11 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 
 	auto* self = new ignition_ps3();
 	g_inst = self;
+
+	// Create the hidden Metal surface on the caller's thread (main), and turn on
+	// RPCS3's frame-capture path so the RSX hands each flip to present_frame.
+	self->metal_view = ignition_make_hidden_metal_view(1280, 720);
+	g_recording_mode = recording_mode::cell;
 
 	// Root RPCS3 under Ignition's system dir rather than the global one. Set
 	// before Init, which is when get_config_dir first resolves.
@@ -662,6 +677,13 @@ void qt_events_aware_op(int repeat_duration_ms, std::function<bool()> wrapped_op
 
 // Writes the frame the RSX just handed back into the live instance's buffer.
 // Called on the RSX thread; the mutex guards against the host's take_frame.
+// The hidden Metal surface RPCS3 renders into; created in create() on the main
+// thread, returned here on the RSX thread.
+display_handle_t ignition_gs_frame::handle() const
+{
+	return g_inst ? g_inst->metal_view : nullptr;
+}
+
 void ignition_gs_frame::present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra) const
 {
 	if (!g_inst)

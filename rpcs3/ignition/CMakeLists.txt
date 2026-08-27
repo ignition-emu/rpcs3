@@ -9,6 +9,7 @@ find_package(Qt6 COMPONENTS Core Gui REQUIRED)
 # Ignition host, the same arm's-length arrangement the libretro cores use.
 add_library(rpcs3_ignition SHARED
 	ignition_ps3.cpp
+	ignition_metal.mm
 
 	# Version glue the emu references.
 	${CMAKE_CURRENT_SOURCE_DIR}/../rpcs3_version.cpp
@@ -72,7 +73,7 @@ else()
 endif()
 
 if(APPLE)
-	target_link_libraries(rpcs3_ignition PRIVATE iconv "-framework CoreVideo" "-framework Foundation")
+	target_link_libraries(rpcs3_ignition PRIVATE iconv "-framework CoreVideo" "-framework Foundation" "-framework AppKit" "-framework QuartzCore" "-framework Metal")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_link_libraries(rpcs3_ignition PRIVATE rt)
 endif()
