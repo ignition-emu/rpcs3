@@ -391,6 +391,14 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	Emu.SetCallbacks(make_callbacks(self));
 	Emu.Init();
 
+	// Settings the embed needs, written into the now-isolated config so boot
+	// honours them: Vulkan for the offscreen path, and Write Color Buffers, which
+	// some titles (e.g. Demon's Souls) need to render correctly. Decoders stay at
+	// RPCS3's LLVM-recompiler defaults.
+	g_cfg.video.renderer.set(video_renderer::vulkan);
+	g_cfg.video.write_color_buffers.set(true);
+	Emulator::SaveSettings(g_cfg.to_string(), {});
+
 	// Render on Vulkan (MoltenVK on macOS), offscreen -- the gs frame hands
 	// frames back as pixels rather than presenting to a window. This has to
 
