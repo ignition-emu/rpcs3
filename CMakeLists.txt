@@ -61,6 +61,7 @@ option(USE_SYSTEM_ZSTD "Prefer system zstd instead of the builtin one" OFF)
 option(HAS_MEMORY_BREAKPOINTS "Add support for memory breakpoints to the interpreter" OFF)
 option(USE_LTO "Use LTO for building" ON)
 option(BUILD_RPCS3_TESTS "Build RPCS3 unit tests." OFF)
+option(WITH_IGNITION "Build the Ignition PS3 embed module (rpcs3_ignition)" OFF)
 option(RUN_RPCS3_TESTS "Run RPCS3 unit tests. Requires BUILD_RPCS3_TESTS" OFF)
 option(USE_GAMEMODE "Choose whether to enable GameMode features or not." ON)
 
@@ -135,5 +136,9 @@ if(BUILD_RPCS3_TESTS)
     enable_testing()
 endif()
 add_subdirectory(rpcs3)
+
+if(WITH_IGNITION)
+	add_subdirectory(rpcs3/ignition)
+endif()
 
 set_directory_properties(PROPERTIES VS_STARTUP_PROJECT rpcs3)
