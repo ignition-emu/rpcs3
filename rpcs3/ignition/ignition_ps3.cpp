@@ -537,17 +537,14 @@ void ignition_ps3_set_pad(ignition_ps3* self, uint32_t port, const ignition_ps3_
 	// the connection each time.
 	if (!pad->ldd)
 	{
-		// Register this port as a connected logical-device (LDD) PS3 pad, the
-		// same setup pad_thread::InitLddPad does, but via the public Pad API so
-		// the emulator source is untouched.
-		static const input::product_info product = input::get_product_info(input::product_type::playstation_3_controller);
-		pad->ldd = true;
-		pad->Init(
-			CELL_PAD_STATUS_CONNECTED | CELL_PAD_STATUS_ASSIGN_CHANGES | CELL_PAD_STATUS_CUSTOM_CONTROLLER,
-			CELL_PAD_CAPABILITY_PS3_CONFORMITY,
-			CELL_PAD_DEV_TYPE_LDD,
-			CELL_PAD_PCLASS_TYPE_STANDARD,
-			product.pclass_profile, product.vendor_id, product.product_id, 50);
+		// Register this port as a connected logical-device (LDD) PS3 pad via the
+		// real pad_thread API, not a hand-rolled pad->Init: InitLddPad also bumps
+		// num_ldd_pad, which feeds pad_thread's now_connect. The RSX overlay
+		// (native OSK, message dialogs) gates input on now_connect, so without
+		// this the game reads our pad via cellPad but the on-screen keyboard and
+		// dialogs ignore it -- e.g. you cannot enter a character name.
+		std::lock_guard lock(pad::g_pad_mutex);
+		pt->InitLddPad(port, nullptr);
 	}
 
 	// The host samples buttons already in cell-pad order: DIGITAL1 in the low

@@ -44,9 +44,12 @@ public:
 
 	mouse_gyro_handler& get_mouse_gyro() { return m_mouse_gyro; }
 
+	// Public for the Ignition embed: register a logical-device pad on a specific
+	// port (bumps num_ldd_pad, which the RSX overlays gate input on).
+	void InitLddPad(u32 handle, const u32* port_status);
+
 protected:
 	void Init();
-	void InitLddPad(u32 handle, const u32* port_status);
 
 	// List of all handlers
 	std::map<pad_handler, std::shared_ptr<PadHandlerBase>> m_handlers;
