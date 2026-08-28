@@ -6,6 +6,9 @@ name: Ignition embed
 on:
   workflow_dispatch:
   push:
+    # Branches only: an ignition-v* tag push is the release workflow's job, and
+    # without this it matched here too and double-built the module.
+    branches: ['**']
     paths:
       - 'rpcs3/ignition/**'
       - '.ci/build-mac.sh'
