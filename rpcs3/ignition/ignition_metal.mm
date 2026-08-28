@@ -19,7 +19,12 @@ extern "C" void* ignition_make_hidden_metal_view(int width, int height)
 	layer.framebufferOnly = NO; // allow the presented drawable to be read/copied
 	view.wantsLayer = YES;
 	view.layer = layer;
-	// +1 from alloc kept intentionally: the view lives for the session.
+	// +1 from alloc, released by ignition_release_metal_view at session end.
 	return (void*)view;
+}
+
+extern "C" void ignition_release_metal_view(void* view)
+{
+	[(NSView*)view release];
 }
 #pragma GCC diagnostic pop

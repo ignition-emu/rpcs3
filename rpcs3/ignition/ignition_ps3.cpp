@@ -1,7 +1,7 @@
 // The ignition PS3 embed: a Qt-free frontend over rpcs3_emu, exposed through the
-// C ABI in ignition_ps3.h. First increment -- prove the module builds, links
-// rpcs3_emu, boots a title and services the pump. Video, audio and input are
-// stubbed here and land in later increments (see docs/ps3-rpcs3-embed.md).
+// C ABI in ignition_ps3.h. Boots a title, services the pump, and hands the host
+// video (via a hidden Metal surface), audio (a capturing backend) and input (an
+// LDD pad). See docs/ps3-rpcs3-embed.md in the Ignition repo.
 
 #include "ignition_ps3.h"
 
@@ -87,10 +87,12 @@ namespace
 
 	void maybe_install_log_listener()
 	{
-		if (const char* e = ::getenv("IGNITION_PS3_LOG"); e && e[0] == '1')
+		static bool s_installed = false;
+		if (const char* e = ::getenv("IGNITION_PS3_LOG"); e && e[0] == '1' && !s_installed)
 		{
 			static stderr_log_listener s_listener;
 			logs::listener::add(&s_listener);
+			s_installed = true;
 		}
 	}
 }
@@ -99,6 +101,7 @@ namespace
 // flag, both driven module-side so the Vulkan path renders with no window and
 // hands frames back through present_frame -- no changes to the emulator.
 extern "C" void* ignition_make_hidden_metal_view(int width, int height);
+extern "C" void ignition_release_metal_view(void* view);
 extern atomic_t<recording_mode> g_recording_mode;
 
 struct ignition_ps3
@@ -311,7 +314,6 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 	cb.check_microphone_permissions = []() {};
 	cb.make_video_source = []() -> std::unique_ptr<video_source> { return {}; };
 	cb.resolve_path = [](std::string_view arg) { return std::string{arg}; };
-	cb.resolve_path_may_not_exist = [](std::string_view arg) { return std::string{arg}; };
 	cb.get_database_config = [](const std::string&) -> std::string { return {}; }; // added upstream; the embed ships no game database
 
 	// Input, audio and settings the emu calls during boot. Modelled on
@@ -399,19 +401,43 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	g_cfg.video.write_color_buffers.set(true);
 	Emulator::SaveSettings(g_cfg.to_string(), {});
 
-	// Render on Vulkan (MoltenVK on macOS), offscreen -- the gs frame hands
-	// frames back as pixels rather than presenting to a window. This has to
-
 	return self;
 }
 
+// Shutdown is asynchronous in RPCS3: Kill signals the threads and an
+// "Emulation Join Thread" joins them, then posts the last step (fxo reset,
+// vm close, state = stopped) to the main thread. So the host must pump until
+// the state is fully stopped; only then is CleanUp (g_fxo->clear) safe, and
+// without it the object manager's destructor asserts at unload or exit.
 void ignition_ps3_destroy(ignition_ps3* self)
 {
 	if (!self)
 	{
 		return;
 	}
-	Emu.Kill();
+	if (!Emu.IsStopped(true))
+	{
+		Emu.Kill(false);
+	}
+	for (int i = 0; i < 2000 && !Emu.IsStopped(true); ++i)
+	{
+		ignition_ps3_pump(self);
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	if (!Emu.IsStopped(true))
+	{
+		std::fprintf(stderr, "[rpcs3] destroy: emulation did not stop within 10 s; leaving objects in place\n");
+	}
+	else
+	{
+		ignition_ps3_pump(self);
+		Emulator::CleanUp();
+	}
+	if (self->metal_view)
+	{
+		ignition_release_metal_view(self->metal_view);
+		self->metal_view = nullptr;
+	}
 	if (g_inst == self)
 	{
 		g_inst = nullptr;
@@ -432,17 +458,23 @@ ignition_ps3_state ignition_ps3_state_of(const ignition_ps3*)
 {
 	switch (Emu.GetStatus())
 	{
-	case system_state::running: return IGNITION_PS3_RUNNING;
-	case system_state::paused:  return IGNITION_PS3_PAUSED;
+	case system_state::running:  return IGNITION_PS3_RUNNING;
+	case system_state::paused:
+	case system_state::frozen:   return IGNITION_PS3_PAUSED;
 	case system_state::loading:
+	case system_state::ready:
 	case system_state::starting: return IGNITION_PS3_LOADING;
-	default: return IGNITION_PS3_STOPPED;
+	case system_state::stopping: return IGNITION_PS3_STOPPING;
+	case system_state::stopped:  return IGNITION_PS3_STOPPED;
 	}
+	return IGNITION_PS3_STOPPED;
 }
 
 void ignition_ps3_pause(ignition_ps3*)  { Emu.Pause(); }
 void ignition_ps3_resume(ignition_ps3*) { Emu.Resume(); }
-void ignition_ps3_stop(ignition_ps3*)   { Emu.GracefulShutdown(false); }
+// Async: ask the game to exit (RPCS3 kills it if it does not respond) and let
+// the host pump the shutdown through, as it pumps everything else.
+void ignition_ps3_stop(ignition_ps3*)   { Emu.GracefulShutdown(false, true); }
 
 uint32_t ignition_ps3_pump(ignition_ps3* self)
 {
@@ -467,7 +499,6 @@ uint32_t ignition_ps3_pump(ignition_ps3* self)
 	return static_cast<uint32_t>(batch.size());
 }
 
-// Video, input and audio: stubbed until their increments land.
 int32_t ignition_ps3_take_frame(ignition_ps3* self, ignition_ps3_frame* out)
 {
 	if (!self || !out)

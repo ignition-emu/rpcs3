@@ -23,17 +23,20 @@ extern "C" {
 
 // Bumped whenever this header changes shape. The host refuses a module whose
 // version it does not know, the same guard libretro's API version gives.
-#define IGNITION_PS3_ABI_VERSION 1
+#define IGNITION_PS3_ABI_VERSION 2
 IGNITION_PS3_API uint32_t ignition_ps3_abi_version(void);
 
 typedef struct ignition_ps3 ignition_ps3;
 
-// Mirrors RPCS3's system_state, narrowed to what the host acts on.
+// Mirrors RPCS3's system_state, narrowed to what the host acts on. STOPPED
+// means fully torn down; STOPPING is the async shutdown in flight, which the
+// host must keep pumping (its last step runs on the main thread).
 typedef enum {
-    IGNITION_PS3_STOPPED = 0,
-    IGNITION_PS3_LOADING = 1,
-    IGNITION_PS3_RUNNING = 2,
-    IGNITION_PS3_PAUSED  = 3,
+    IGNITION_PS3_STOPPED  = 0,
+    IGNITION_PS3_LOADING  = 1,
+    IGNITION_PS3_RUNNING  = 2,
+    IGNITION_PS3_PAUSED   = 3,
+    IGNITION_PS3_STOPPING = 4,
 } ignition_ps3_state;
 
 // Zero is success; non-zero mirrors game_boot_result so the host can report why.
@@ -65,8 +68,11 @@ typedef struct {
 
 // --- lifecycle -------------------------------------------------------------
 
-// Builds Emu and installs the ignition EmuCallbacks. Null on failure.
+// Builds Emu and installs the ignition EmuCallbacks. Null on failure. One
+// instance at a time; a new one may be created after destroy.
 IGNITION_PS3_API ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs);
+// Kills any running emulation, pumps its shutdown to completion, and clears
+// RPCS3's object manager. Main thread only; blocks for the shutdown (bounded).
 IGNITION_PS3_API void          ignition_ps3_destroy(ignition_ps3*);
 
 // Boots a title (disc dir, ELF, or PKG path). Emulation threads start on their
@@ -76,6 +82,8 @@ IGNITION_PS3_API ignition_ps3_boot_result ignition_ps3_boot(ignition_ps3*, const
 IGNITION_PS3_API ignition_ps3_state ignition_ps3_state_of(const ignition_ps3*);
 IGNITION_PS3_API void ignition_ps3_pause(ignition_ps3*);
 IGNITION_PS3_API void ignition_ps3_resume(ignition_ps3*);
+// Asks the game to exit and returns at once; the state goes STOPPING and
+// reaches STOPPED after the host has pumped the shutdown through.
 IGNITION_PS3_API void ignition_ps3_stop(ignition_ps3*);
 
 // --- the tick --------------------------------------------------------------
