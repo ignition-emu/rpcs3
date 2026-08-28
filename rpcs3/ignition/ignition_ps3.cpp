@@ -104,6 +104,8 @@ extern "C" void* ignition_make_hidden_metal_view(int width, int height);
 extern "C" void ignition_release_metal_view(void* view);
 extern atomic_t<recording_mode> g_recording_mode;
 
+class capture_audio_backend;
+
 struct ignition_ps3
 {
 	// A window-less NSView+CAMetalLayer RPCS3 renders into (see handle()).
@@ -120,10 +122,12 @@ struct ignition_ps3
 	uint32_t frame_w = 0, frame_h = 0, frame_pitch = 0;
 	bool frame_bgra = false, frame_new = false;
 
-	// Captured audio: the backend pulls PS3 samples on its own thread and pushes
-	// interleaved stereo s16 here; the host drains it on read_audio.
+	// Captured audio: read_audio pulls from cell_audio on demand (driven by the
+	// host's audio clock), the same write-callback contract the real backends
+	// use -- no polling thread, no intermediate ring (that double-clocked and
+	// crackled). Guarded by audio_mtx.
 	std::mutex audio_mtx;
-	std::deque<int16_t> audio_ring;
+	capture_audio_backend* audio_backend = nullptr;
 	uint32_t audio_hz = 0;
 };
 
@@ -176,8 +180,7 @@ static ignition_ps3* g_inst = nullptr;
 // host side simple.
 class capture_audio_backend final : public AudioBackend
 {
-	std::atomic<bool> m_run{false};
-	std::thread m_thread;
+	std::vector<float> m_conv;
 
 public:
 	capture_audio_backend() = default;
@@ -199,66 +202,55 @@ public:
 		{
 			std::lock_guard lock(g_inst->audio_mtx);
 			g_inst->audio_hz = static_cast<u32>(freq);
-			g_inst->audio_ring.clear();
+			g_inst->audio_backend = this;
 		}
 		return true;
 	}
 
 	void Close() override
 	{
-		m_run = false;
-		if (m_thread.joinable())
+		if (g_inst)
 		{
-			m_thread.join();
+			std::lock_guard lock(g_inst->audio_mtx);
+			if (g_inst->audio_backend == this)
+			{
+				g_inst->audio_backend = nullptr;
+			}
 		}
 		m_playing = false;
 	}
 
 	f64 GetCallbackFrameLen() override { return 0.005; } // 5 ms
 
-	void Play() override
-	{
-		m_playing = true;
-		if (!m_run.exchange(true))
-		{
-			m_thread = std::thread([this] { run(); });
-		}
-	}
-
+	void Play() override  { m_playing = true; }
 	void Pause() override { m_playing = false; }
 	bool IsPlaying() override { return m_playing; }
 
-private:
-	void run()
+	// Pull up to max_frames interleaved stereo frames from cell_audio, converted
+	// to s16. Called by read_audio on the host's audio cadence -- the same
+	// contract CubebBackend::data_cb uses (m_cb_mutex + m_write_callback), so
+	// there is a single clock (the host device) and no drift. Returns frames
+	// actually produced; the host's own buffer rides out short-term jitter.
+	size_t pull_frames(int16_t* dst, size_t max_frames)
 	{
-		const u32 frames = static_cast<u32>(static_cast<u32>(m_sampling_rate) * GetCallbackFrameLen());
-		std::vector<float> tmp(static_cast<size_t>(frames) * 2);
-
-		while (m_run)
+		std::unique_lock lock(m_cb_mutex, std::defer_lock);
+		if (!lock.try_lock_for(std::chrono::milliseconds{2}) || !m_write_callback || !m_playing)
 		{
-			if (m_playing && m_write_callback && g_inst)
-			{
-				const u32 got = m_write_callback(static_cast<u32>(tmp.size() * sizeof(float)), tmp.data());
-				const u32 got_floats = got / sizeof(float);
-				if (got_floats)
-				{
-					std::lock_guard lock(g_inst->audio_mtx);
-					auto& ring = g_inst->audio_ring;
-					for (u32 i = 0; i < got_floats; ++i)
-					{
-						ring.push_back(static_cast<int16_t>(std::clamp(tmp[i] * 32767.0f, -32768.0f, 32767.0f)));
-					}
-					// Bound latency to ~0.5 s of stereo; drop the oldest past that.
-					const size_t cap = static_cast<size_t>(m_sampling_rate);
-					while (ring.size() > cap)
-					{
-						ring.pop_front();
-					}
-				}
-			}
-
-			std::this_thread::sleep_for(std::chrono::microseconds(static_cast<u64>(GetCallbackFrameLen() * 1e6)));
+			return 0;
 		}
+		if (m_conv.size() < max_frames * 2)
+		{
+			m_conv.resize(max_frames * 2);
+		}
+		const u32 bytes_req = static_cast<u32>(max_frames * 2 * sizeof(float));
+		u32 written = std::min(m_write_callback(bytes_req, m_conv.data()), bytes_req);
+		written -= written % static_cast<u32>(2 * sizeof(float)); // whole stereo frames
+		const size_t frames = written / (2 * sizeof(float));
+		for (size_t i = 0; i < frames * 2; ++i)
+		{
+			dst[i] = static_cast<int16_t>(std::clamp(m_conv[i] * 32767.0f, -32768.0f, 32767.0f));
+		}
+		return frames;
 	}
 };
 
@@ -601,14 +593,11 @@ size_t ignition_ps3_read_audio(ignition_ps3* self, int16_t* buf, size_t max_fram
 		return 0;
 	}
 	std::lock_guard lock(self->audio_mtx);
-	auto& ring = self->audio_ring;
-	const size_t frames = std::min(max_frames, ring.size() / 2);
-	for (size_t i = 0; i < frames * 2; ++i)
+	if (!self->audio_backend)
 	{
-		buf[i] = ring.front();
-		ring.pop_front();
+		return 0;
 	}
-	return frames;
+	return self->audio_backend->pull_frames(buf, max_frames);
 }
 
 uint32_t ignition_ps3_audio_rate(const ignition_ps3* self)
