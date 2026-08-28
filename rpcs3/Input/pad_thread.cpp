@@ -913,6 +913,13 @@ extern bool close_osk_from_ps_button();
 
 void pad_thread::open_home_menu()
 {
+#ifdef IGNITION_EMBED
+	// The Ignition embed replaces RPCS3's in-game overlay with its own host menu,
+	// so the PS button never opens the native home menu. Other overlays (OSK,
+	// message/save dialogs) are created elsewhere and are unaffected.
+	return;
+#endif
+
 	// Check if the OSK is open and can be closed
 	if (!close_osk_from_ps_button())
 	{
