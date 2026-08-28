@@ -383,6 +383,20 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 
 	Emu.SetHasGui(false);
 	Emu.SetUsr("00000001");
+
+	// main_application detects GPUs via render_creator and tells Emu which
+	// renderers are supported; the embed detects nothing, so Emu keeps its
+	// default of {null} only and forces the renderer to Null at boot. That not
+	// only mismatches our forced VKGSRender -- it skips the RSX overlay
+	// display_manager (created only for opengl/vulkan), so there is no native
+	// on-screen keyboard or message-dialog overlay. Declare Vulkan supported.
+	// Only mark Vulkan as *supported* (not default): Emulator::Init ensures a
+	// non-empty graphics adapter when the default is Vulkan, which we do not
+	// enumerate. Supported is enough -- create() sets g_cfg.video.renderer to
+	// Vulkan, and this makes Emu::Load's "is it supported" check pass instead of
+	// forcing it to Null (which skipped the overlay display_manager -> no OSK).
+	Emu.SetSupportedRenderers({video_renderer::null, video_renderer::vulkan});
+
 	Emu.SetCallbacks(make_callbacks(self));
 	Emu.Init();
 
