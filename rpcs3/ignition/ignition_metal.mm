@@ -27,4 +27,21 @@ extern "C" void ignition_release_metal_view(void* view)
 {
 	[(NSView*)view release];
 }
+
+// The system font directories, resolved the way Qt's QStandardPaths::FontsLocation
+// does: Library/Fonts across the user, local and system domains. Caller frees each
+// string and the array with free().
+extern "C" char** ignition_macos_font_dirs(int* out_count)
+{
+	NSArray<NSString*>* libs = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSAllDomainsMask, YES);
+	char** dirs = (char**)malloc(sizeof(char*) * libs.count);
+	int n = 0;
+	for (NSString* lib in libs)
+	{
+		NSString* fonts = [lib stringByAppendingPathComponent:@"Fonts/"];
+		dirs[n++] = strdup(fonts.fileSystemRepresentation);
+	}
+	*out_count = n;
+	return dirs;
+}
 #pragma GCC diagnostic pop

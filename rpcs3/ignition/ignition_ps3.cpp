@@ -7,6 +7,7 @@
 
 #include "Emu/System.h"
 #include "util/logs.hpp"
+#include "Utilities/File.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
@@ -89,11 +90,23 @@ namespace
 	void maybe_install_log_listener()
 	{
 		static bool s_installed = false;
-		if (const char* e = ::getenv("IGNITION_PS3_LOG"); e && e[0] == '1' && !s_installed)
+		if (s_installed)
+		{
+			return;
+		}
+		s_installed = true;
+
+		// File listener, same as stock main(): RPCS3.log under the (isolated) log
+		// dir, capped at a quarter of free space. Kept alive for the process.
+		fs::device_stat stats{};
+		const u64 cap = fs::statfs(fs::get_cache_dir(), stats) ? stats.avail_free / 4 : 128ull * 1024 * 1024;
+		static std::unique_ptr<logs::listener> s_file = logs::make_file_listener(fs::get_log_dir() + "RPCS3.log", cap);
+
+		// Optional stderr mirror for interactive debugging.
+		if (const char* e = ::getenv("IGNITION_PS3_LOG"); e && e[0] == '1')
 		{
 			static stderr_log_listener s_listener;
 			logs::listener::add(&s_listener);
-			s_installed = true;
 		}
 	}
 }
@@ -103,6 +116,7 @@ namespace
 // hands frames back through present_frame -- no changes to the emulator.
 extern "C" void* ignition_make_hidden_metal_view(int width, int height);
 extern "C" void ignition_release_metal_view(void* view);
+extern "C" char** ignition_macos_font_dirs(int* out_count);
 extern atomic_t<recording_mode> g_recording_mode;
 
 class capture_audio_backend;
@@ -343,7 +357,20 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 	cb.get_photo_path    = [](std::string_view) -> std::string { return {}; };
 	cb.get_image_info    = [](const std::string&, std::string&, s32&, s32&, s32&) { return false; };
 	cb.get_scaled_image  = [](const std::string&, s32, s32, s32&, s32&, u8*, bool) { return false; };
-	cb.get_font_dirs     = []() -> std::vector<std::string> { return {}; };
+	// Same dirs Qt's QStandardPaths::FontsLocation yields, queried from the OS
+	// (see ignition_macos_font_dirs) so overlay text has glyphs to draw.
+	cb.get_font_dirs     = []() -> std::vector<std::string> {
+		int count = 0;
+		char** dirs = ignition_macos_font_dirs(&count);
+		std::vector<std::string> result;
+		for (int i = 0; i < count; ++i)
+		{
+			result.emplace_back(dirs[i]);
+			free(dirs[i]);
+		}
+		free(dirs);
+		return result;
+	};
 	cb.on_install_pkgs   = [](const std::vector<std::string>&) { return false; };
 	cb.enable_gamemode   = [](bool) {};
 
