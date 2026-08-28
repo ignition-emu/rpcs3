@@ -15,6 +15,10 @@ add_library(rpcs3_ignition SHARED
 	${CMAKE_CURRENT_SOURCE_DIR}/../rpcs3_version.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../stdafx.cpp
 
+	# Localized overlay text (OSK, message/save/trophy dialogs). QtCore-only, the
+	# same source gui_application feeds get_localized_string from.
+	${CMAKE_CURRENT_SOURCE_DIR}/../rpcs3qt/localized_emu.cpp
+
 	# The pad/Input system the emu calls into. It lives in rpcs3_ui (the Qt GUI
 	# lib) upstream; compiled here directly so the module links QtCore/QtGui but
 	# not the GUI. gui_pad_thread and the camera sinks are left out -- pad_thread
@@ -46,6 +50,7 @@ target_include_directories(rpcs3_ignition
 	PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}
 		${CMAKE_CURRENT_SOURCE_DIR}/..
+		${CMAKE_CURRENT_SOURCE_DIR}/../rpcs3qt
 )
 
 # The emu core and the non-Qt dependencies rpcs3_lib also pulls. No rpcs3_ui,

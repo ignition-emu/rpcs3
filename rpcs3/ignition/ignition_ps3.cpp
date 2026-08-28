@@ -49,6 +49,10 @@
 #include <thread>
 #include <utility>
 
+// Last: pulls <QObject>, whose keyword macros mangle the emu headers if it lands
+// before them. Only make_callbacks below needs it.
+#include "rpcs3qt/localized_emu.h"
+
 // rpcs3_emu calls this and leaves the frontend to define it. The GUI logs it to
 // a dialog; here it goes to stderr, which is where a host running headless looks.
 // Globals the emu and pad system read, defined in RPCS3's app main (rpcs3.cpp)
@@ -137,11 +141,12 @@ struct ignition_ps3
 	uint32_t frame_w = 0, frame_h = 0, frame_pitch = 0;
 	bool frame_bgra = false, frame_new = false;
 
-	// Captured audio: read_audio pulls from cell_audio on demand (driven by the
-	// host's audio clock), the same write-callback contract the real backends
-	// use -- no polling thread, no intermediate ring (that double-clocked and
-	// crackled). Guarded by audio_mtx.
+	// Captured audio: the backend drains cell_audio at a steady device cadence
+	// (like cubeb's data_cb) into this ring; read_audio serves Godot from it, so
+	// the render loop's jitter never reaches cell_audio's time-stretch. Guarded
+	// by audio_mtx.
 	std::mutex audio_mtx;
+	std::deque<int16_t> audio_ring;
 	capture_audio_backend* audio_backend = nullptr;
 	uint32_t audio_hz = 0;
 };
@@ -196,6 +201,8 @@ static ignition_ps3* g_inst = nullptr;
 class capture_audio_backend final : public AudioBackend
 {
 	std::vector<float> m_conv;
+	std::thread m_thread;
+	std::atomic<bool> m_run{false};
 
 public:
 	capture_audio_backend() = default;
@@ -217,13 +224,22 @@ public:
 		{
 			std::lock_guard lock(g_inst->audio_mtx);
 			g_inst->audio_hz = static_cast<u32>(freq);
+			g_inst->audio_ring.clear();
 			g_inst->audio_backend = this;
 		}
+
+		m_run.store(true);
+		m_thread = std::thread([this] { run(); });
 		return true;
 	}
 
 	void Close() override
 	{
+		m_run.store(false);
+		if (m_thread.joinable())
+		{
+			m_thread.join();
+		}
 		if (g_inst)
 		{
 			std::lock_guard lock(g_inst->audio_mtx);
@@ -241,31 +257,56 @@ public:
 	void Pause() override { m_playing = false; }
 	bool IsPlaying() override { return m_playing; }
 
-	// Pull up to max_frames interleaved stereo frames from cell_audio, converted
-	// to s16. Called by read_audio on the host's audio cadence -- the same
-	// contract CubebBackend::data_cb uses (m_cb_mutex + m_write_callback), so
-	// there is a single clock (the host device) and no drift. Returns frames
-	// actually produced; the host's own buffer rides out short-term jitter.
-	size_t pull_frames(int16_t* dst, size_t max_frames)
+private:
+	// Cubeb's device thread, stood in for: drain cell_audio one callback-frame at
+	// a time on a steady clock (m_cb_mutex + m_write_callback, exactly
+	// CubebBackend::data_cb) into the ring. A self-correcting sleep_until keeps the
+	// cadence regular so cell_audio never engages time-stretching; read_audio then
+	// serves Godot from the ring at whatever rate the render loop asks.
+	void run()
 	{
-		std::unique_lock lock(m_cb_mutex, std::defer_lock);
-		if (!lock.try_lock_for(std::chrono::milliseconds{2}) || !m_write_callback || !m_playing)
+		using clock = std::chrono::steady_clock;
+		auto next = clock::now();
+		while (m_run.load(std::memory_order_relaxed))
 		{
-			return 0;
+			const f64 frame_len = GetCallbackFrameLen();
+			const size_t want = static_cast<size_t>(static_cast<u32>(m_sampling_rate) * frame_len);
+			std::unique_lock lock(m_cb_mutex, std::defer_lock);
+			if (want && m_playing && lock.try_lock_for(std::chrono::milliseconds{2}) && m_write_callback && m_playing)
+			{
+				if (m_conv.size() < want * 2)
+				{
+					m_conv.resize(want * 2);
+				}
+				const u32 bytes_req = static_cast<u32>(want * 2 * sizeof(float));
+				u32 written = std::min(m_write_callback(bytes_req, m_conv.data()), bytes_req);
+				lock.unlock();
+				const size_t samples = (written / sizeof(float)) & ~size_t(1); // whole stereo frames
+				if (g_inst && samples)
+				{
+					std::lock_guard rlock(g_inst->audio_mtx);
+					auto& ring = g_inst->audio_ring;
+					for (size_t i = 0; i < samples; ++i)
+					{
+						ring.push_back(static_cast<int16_t>(std::clamp(m_conv[i] * 32767.0f, -32768.0f, 32767.0f)));
+					}
+					// Shed anything past ~100 ms so a stalled reader can't build latency.
+					const size_t cap = static_cast<size_t>(static_cast<u32>(m_sampling_rate)) * 2 / 10;
+					while (ring.size() > cap)
+					{
+						ring.pop_front();
+					}
+				}
+			}
+
+			next += std::chrono::duration_cast<clock::duration>(std::chrono::duration<f64>(frame_len));
+			const auto now = clock::now();
+			if (next < now) // fell behind (e.g. a long lock wait); resync rather than spin
+			{
+				next = now;
+			}
+			std::this_thread::sleep_until(next);
 		}
-		if (m_conv.size() < max_frames * 2)
-		{
-			m_conv.resize(max_frames * 2);
-		}
-		const u32 bytes_req = static_cast<u32>(max_frames * 2 * sizeof(float));
-		u32 written = std::min(m_write_callback(bytes_req, m_conv.data()), bytes_req);
-		written -= written % static_cast<u32>(2 * sizeof(float)); // whole stereo frames
-		const size_t frames = written / (2 * sizeof(float));
-		for (size_t i = 0; i < frames * 2; ++i)
-		{
-			dst[i] = static_cast<int16_t>(std::clamp(m_conv[i] * 32767.0f, -32768.0f, 32767.0f));
-		}
-		return frames;
 	}
 };
 
@@ -310,8 +351,12 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 	cb.try_to_quit = [](bool, std::function<void()>) -> bool { return false; };
 	cb.handle_taskbar_progress = [](s32, s32) {};
 
-	cb.get_localized_string    = [](localized_string_id, const char*) -> std::string { return {}; };
-	cb.get_localized_u32string = [](localized_string_id, const char*) -> std::u32string { return {}; };
+	// Overlay text (OSK, dialogs) pulls its labels through these; stock's headless
+	// path stubs them, but we surface the native overlays, so feed the real
+	// strings like gui_application does. get_localized_setting is settings-dialog
+	// only, which the embed never shows.
+	cb.get_localized_string    = [](localized_string_id id, const char* args) -> std::string { return localized_emu::get_string(id, args); };
+	cb.get_localized_u32string = [](localized_string_id id, const char* args) -> std::u32string { return localized_emu::get_u32string(id, args); };
 	cb.get_localized_setting   = [](const cfg::_base*, u32) -> std::string { return {}; };
 
 	cb.play_sound    = [](const std::string&, std::optional<f32>) {};
@@ -637,11 +682,14 @@ size_t ignition_ps3_read_audio(ignition_ps3* self, int16_t* buf, size_t max_fram
 		return 0;
 	}
 	std::lock_guard lock(self->audio_mtx);
-	if (!self->audio_backend)
+	auto& ring = self->audio_ring;
+	const size_t frames = std::min(max_frames, ring.size() / 2);
+	for (size_t i = 0; i < frames * 2; ++i)
 	{
-		return 0;
+		buf[i] = ring.front();
+		ring.pop_front();
 	}
-	return self->audio_backend->pull_frames(buf, max_frames);
+	return frames;
 }
 
 uint32_t ignition_ps3_audio_rate(const ignition_ps3* self)
