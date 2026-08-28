@@ -33,6 +33,7 @@
 #include "util/serialization.hpp"
 #include "Emu/VFS.h"
 #include "Emu/vfs_config.h"
+#include "Emu/system_utils.hpp"
 #include "Crypto/unself.h"
 #include "Crypto/key_vault.h"
 #include "Loader/PUP.h"
@@ -384,6 +385,11 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	Emu.SetUsr("00000001");
 	Emu.SetCallbacks(make_callbacks(self));
 	Emu.Init();
+
+	// Write RPCS3's own log, like main_application::InitializeEmulator does --
+	// our create() otherwise skipped it, so only TTY.log appeared and the
+	// emulator log (overlay/OSK/audio/etc.) was invisible for diagnosis.
+	rpcs3::utils::configure_logs(Emu.IsStopped());
 
 	// Settings the embed needs, written into the now-isolated config so boot
 	// honours them: Vulkan for the offscreen path, and Write Color Buffers, which
