@@ -1,0 +1,49 @@
+# Builds the Ignition PS3 embed module (rpcs3_ignition) on macOS arm64 and
+# nothing else -- no app, no packaging. The first proof that the Qt-free module
+# links rpcs3_emu. Manual for now; a release workflow comes once it builds.
+name: Ignition embed
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'rpcs3/ignition/**'
+      - '.ci/build-mac.sh'
+      - '.github/workflows/ignition-embed.yml'
+
+jobs:
+  macos-arm64:
+    name: Ignition module (macOS arm64)
+    runs-on: macos-15
+    env:
+      CCACHE_DIR: /tmp/ccache_dir
+      QT_VER: '6.11.1'
+      QT_VER_MAIN: '6'
+      LLVM_COMPILER_VER: '22'
+      AARCH64: '1'
+      RUN_UNIT_TESTS: 'OFF'
+      WITH_IGNITION: 'ON'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      - name: Restore Build Ccache
+        uses: actions/cache/restore@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-ignition-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-ccache-ignition-
+
+      - name: Build module
+        run: .ci/build-mac.sh
+
+      - name: Upload module
+        if: always()
+        uses: actions/upload-artifact@main
+        with:
+          name: rpcs3_ignition-macos-arm64
+          path: build/**/librpcs3_ignition.dylib
+          if-no-files-found: warn
+          compression-level: 0
