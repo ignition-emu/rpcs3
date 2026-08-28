@@ -1,0 +1,59 @@
+name: Ignition PS3 module release (macOS arm64)
+
+# Builds the RPCS3 embed dylib Ignition ships on macOS and publishes it on
+# ignition-v* tags. Separate from ignition-embed.yml (the per-push CI build) so a
+# rebase never touches it. macos-15 for the clang22/SDK15 the recompiler needs.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["ignition-v*"]
+
+jobs:
+  build:
+    name: PS3 module (macOS arm64)
+    runs-on: macos-15
+    # action-gh-release writes; the workflow token defaults to read-only.
+    permissions:
+      contents: write
+    env:
+      CCACHE_DIR: /tmp/ccache_dir
+      QT_VER: '6.11.1'
+      QT_VER_MAIN: '6'
+      LLVM_COMPILER_VER: '22'
+      AARCH64: '1'
+      RUN_UNIT_TESTS: 'OFF'
+      WITH_IGNITION: 'ON'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      - name: Restore Build Ccache
+        uses: actions/cache/restore@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-ignition-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-ccache-ignition-
+
+      - name: Build module
+        run: .ci/build-mac.sh
+
+      - name: Package
+        run: |
+          dylib=$(find build -name librpcs3_ignition.dylib | head -1)
+          zip -j librpcs3_ignition.dylib.zip "$dylib"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: rpcs3_ignition-macos-arm64
+          path: librpcs3_ignition.dylib.zip
+          compression-level: 0
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/ignition-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: librpcs3_ignition.dylib.zip
