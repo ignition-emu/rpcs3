@@ -18,6 +18,9 @@
 #include "Emu/Cell/Modules/cellMsgDialog.h"
 #include "Emu/Cell/Modules/cellOskDialog.h"
 #include "Emu/Cell/Modules/cellSaveData.h"
+#include "Emu/Cell/Modules/cellSysutil.h"
+#include "Emu/RSX/Overlays/overlay_manager.h"
+#include "Emu/RSX/Overlays/overlay_save_dialog.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 #include "util/video_source.h"
 #include "util/video_provider.h"
@@ -345,6 +348,32 @@ private:
 	bool m_active = false;
 };
 
+// Drives RPCS3's native save-data overlay. cellSaveData reaches it only through
+// get_save_dialog (stock routes it via the Qt save_data_dialog); return null and
+// every save/load list silently cancels. This is the native branch of
+// save_data_dialog::ShowSaveDataList, Qt-free -- the same overlay stock shows.
+class ignition_save_dialog final : public SaveDialogBase
+{
+public:
+	s32 ShowSaveDataList(const std::string& base_dir, std::vector<SaveDataEntry>& save_entries, s32 focused, u32 op, vm::ptr<CellSaveDataListSet> listSet, bool enable_overlay) override
+	{
+		const bool use_end = sysutil_send_system_cmd(CELL_SYSUTIL_DRAWING_BEGIN, 0) >= 0;
+		if (auto manager = g_fxo->try_get<rsx::overlays::display_manager>())
+		{
+			const s32 result = manager->create<rsx::overlays::save_dialog>()->show(base_dir, save_entries, focused, op, listSet, enable_overlay);
+			if (result != rsx::overlays::user_interface::selection_code::error)
+			{
+				if (use_end) sysutil_send_system_cmd(CELL_SYSUTIL_DRAWING_END, 0);
+				return result;
+			}
+		}
+		// No Qt fallback here (SetHasGui is false); cancel cleanly, as stock's
+		// no-GUI path does.
+		if (use_end) sysutil_send_system_cmd(CELL_SYSUTIL_DRAWING_END, 0);
+		return rsx::overlays::user_interface::selection_code::canceled;
+	}
+};
+
 // Fills EmuCallbacks without Qt: the pump is a plain queue. Most of the rest is
 // stubbed like headless_application -- but we run Vulkan with native overlays, so
 // where the overlay path needs a real value (fonts, localized text, video source)
@@ -373,7 +402,7 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 
 	cb.get_msg_dialog                 = []() -> std::shared_ptr<MsgDialogBase> { return {}; };
 	cb.get_osk_dialog                 = []() -> std::shared_ptr<OskDialogBase> { return {}; };
-	cb.get_save_dialog                = []() -> std::unique_ptr<SaveDialogBase> { return {}; };
+	cb.get_save_dialog                = []() -> std::unique_ptr<SaveDialogBase> { return std::make_unique<ignition_save_dialog>(); };
 	cb.get_trophy_notification_dialog = []() -> std::unique_ptr<TrophyNotificationBase> { return {}; };
 
 	cb.on_run    = [](bool) {};
