@@ -43,8 +43,10 @@
 #include <atomic>
 
 #include <chrono>
+#include <clocale>
 #include <cstdio>
 #include <deque>
+#include <filesystem>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -112,6 +114,11 @@ namespace
 			static stderr_log_listener s_listener;
 			logs::listener::add(&s_listener);
 		}
+
+		// Flush the startup backlog to the listeners and stop buffering. Without
+		// this (stock does it in main()) every message is stored forever in
+		// g_messages -- an unbounded leak over a play session.
+		logs::set_init({});
 	}
 }
 
@@ -285,16 +292,22 @@ private:
 				if (g_inst && samples)
 				{
 					std::lock_guard rlock(g_inst->audio_mtx);
-					auto& ring = g_inst->audio_ring;
-					for (size_t i = 0; i < samples; ++i)
+					// Only the registered backend feeds the ring: if a game opened a
+					// second one (cellAudio + rsxaudio), the later Open wins and stray
+					// producers stay silent rather than interleaving into the ring.
+					if (g_inst->audio_backend == this)
 					{
-						ring.push_back(static_cast<int16_t>(std::clamp(m_conv[i] * 32767.0f, -32768.0f, 32767.0f)));
-					}
-					// Shed anything past ~100 ms so a stalled reader can't build latency.
-					const size_t cap = static_cast<size_t>(static_cast<u32>(m_sampling_rate)) * 2 / 10;
-					while (ring.size() > cap)
-					{
-						ring.pop_front();
+						auto& ring = g_inst->audio_ring;
+						for (size_t i = 0; i < samples; ++i)
+						{
+							ring.push_back(static_cast<int16_t>(std::clamp(m_conv[i] * 32767.0f, -32768.0f, 32767.0f)));
+						}
+						// Shed past ~100 ms so a stalled reader can't build latency.
+						const size_t cap = static_cast<size_t>(static_cast<u32>(m_sampling_rate)) * 2 / 10;
+						while (ring.size() > cap)
+						{
+							ring.pop_front();
+						}
 					}
 				}
 			}
@@ -310,9 +323,33 @@ private:
 	}
 };
 
-// Fills EmuCallbacks without Qt: the pump is a plain queue, and everything the
-// null-renderer path does not need is a stub, exactly as headless_application
-// stubs it.
+// A no-op video_source. The overlays wrap make_video_source() in ensure(), so a
+// null would abort at boot when a game's SND0.AT3 triggers the boot-music overlay
+// (we run Vulkan, so the overlay manager exists -- headless dodges this with the
+// null renderer). Reporting no frames degrades to silence, never a crash.
+class null_video_source final : public video_source
+{
+public:
+	void set_video_path(const std::string&) override {}
+	void set_audio_path(const std::string&) override {}
+	void set_active(bool active) override { m_active = active; }
+	bool get_active() const override { return m_active; }
+	bool has_new() const override { return false; }
+	void get_image(std::vector<u8>& data, int& w, int& h, int& ch, int& bpp) override
+	{
+		data.clear();
+		w = h = ch = bpp = 0;
+	}
+
+private:
+	bool m_active = false;
+};
+
+// Fills EmuCallbacks without Qt: the pump is a plain queue. Most of the rest is
+// stubbed like headless_application -- but we run Vulkan with native overlays, so
+// where the overlay path needs a real value (fonts, localized text, video source)
+// we provide one instead of headless's null. Every field is assigned; an unset
+// std::function would crash on first call.
 static EmuCallbacks make_callbacks(ignition_ps3* self)
 {
 	EmuCallbacks cb{};
@@ -364,8 +401,21 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 	cb.display_sleep_control_supported = []() { return false; };
 	cb.enable_display_sleep = [](bool) {};
 	cb.check_microphone_permissions = []() {};
-	cb.make_video_source = []() -> std::unique_ptr<video_source> { return {}; };
-	cb.resolve_path = [](std::string_view arg) { return std::string{arg}; };
+	cb.make_video_source = []() -> std::unique_ptr<video_source> { return std::make_unique<null_video_source>(); };
+	// The emu core resolves paths for boot-category and argv[0] math, so match
+	// stock (Qt canonicalFilePath): canonical with symlinks resolved, empty if the
+	// path is gone; may_not_exist normalises without requiring existence. Identity
+	// would silently diverge on symlinks (/tmp -> /private/tmp) or '..'.
+	cb.resolve_path = [](std::string_view arg) -> std::string {
+		std::error_code ec;
+		const auto p = std::filesystem::canonical(std::filesystem::path(std::string{arg}), ec);
+		return ec ? std::string{} : p.string();
+	};
+	cb.resolve_path_may_not_exist = [](std::string_view arg) -> std::string {
+		std::error_code ec;
+		const auto p = std::filesystem::weakly_canonical(std::filesystem::path(std::string{arg}), ec);
+		return ec ? std::string{arg} : p.string();
+	};
 	cb.get_database_config = [](const std::string&) -> std::string { return {}; }; // added upstream; the embed ships no game database
 
 	// Input, audio and settings the emu calls during boot. Modelled on
@@ -435,6 +485,11 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	{
 		return nullptr;
 	}
+
+	// Force the C locale like stock does at startup: the host (Godot) may run
+	// under a locale where '.' is not the decimal point, which would corrupt
+	// config/YAML float parsing inside Emu.Init.
+	std::setlocale(LC_ALL, "C");
 
 	maybe_install_log_listener();
 
