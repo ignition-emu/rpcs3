@@ -199,9 +199,12 @@ public:
 
 	display_handle_t handle() const override;
 
-	// Always consume: this is what makes the RSX read the frame back and call
-	// present_frame every flip instead of only while recording.
-	bool can_consume_frame() const override { return true; }
+	// Consume (read frames back to the host) only while the game is actually
+	// running. During a boot/reboot's load+precompile the RSX state is fragile,
+	// and the readback path's mid-flip GPU sync corrupts it -- stock never
+	// records across a boot either. Once running, this drives present_frame every
+	// flip; before then the host simply holds the last frame.
+	bool can_consume_frame() const override { return Emu.IsRunning(); }
 
 	void present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra) const override;
 	void take_screenshot(std::vector<u8>&&, u32, u32, bool) override {}
