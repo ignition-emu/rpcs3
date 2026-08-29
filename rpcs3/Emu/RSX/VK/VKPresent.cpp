@@ -680,9 +680,21 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 	// WARNING: We have to do this here. We cannot touch the acquired image on the CB and then do a hard sync on it before it is submitted to the presentation engine.
 	// That introduces a WRITE_AFTER_PRESENT (from the previous present) when we later try to present on a different CB
-	if (image_to_flip && need_media_capture)
+	// Capture even without a game frame when an overlay is visible, so loading and
+	// compile progress reaches a windowless host. With no game buffer we clear a
+	// swapchain-sized base to black and draw the overlays onto it, mirroring the
+	// on-screen path's black-plus-overlay present.
+	const bool capture_overlay_only = (!image_to_flip && has_overlay);
+	if (need_media_capture && (image_to_flip || capture_overlay_only))
 	{
-		const usz sshot_size = buffer_height * buffer_width * 4;
+		const u32 cap_width  = image_to_flip ? buffer_width  : m_swapchain_dims.width;
+		const u32 cap_height = image_to_flip ? buffer_height : m_swapchain_dims.height;
+		const VkFormat cap_format = image_to_flip ? image_to_flip->format() : m_swapchain->get_surface_format();
+		// Overlays must be composited whenever there is no game frame (else the
+		// capture is empty); otherwise only when the config asks to record them.
+		const bool compose_overlays = has_overlay && (!image_to_flip || g_cfg.video.record_with_overlays);
+
+		const usz sshot_size = cap_height * cap_width * 4;
 
 		vk::buffer sshot_vkbuf(*m_device, utils::align(sshot_size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
@@ -698,13 +710,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		copy_info.imageOffset.x = 0;
 		copy_info.imageOffset.y = 0;
 		copy_info.imageOffset.z = 0;
-		copy_info.imageExtent.width = buffer_width;
-		copy_info.imageExtent.height = buffer_height;
+		copy_info.imageExtent.width = cap_width;
+		copy_info.imageExtent.height = cap_height;
 		copy_info.imageExtent.depth = 1;
 
 		vk::image* image_to_copy = image_to_flip;
 
-		if (g_cfg.video.record_with_overlays && has_overlay)
+		if (compose_overlays)
 		{
 			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
 			single_target_pass = vk::get_renderpass(*m_device, key);
@@ -713,9 +725,9 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			if (m_overlay_recording_img)
 			{
 				// Validate
-				if (m_overlay_recording_img->format() != image_to_flip->format() ||
-					m_overlay_recording_img->width() != image_to_flip->width() ||
-					m_overlay_recording_img->height() != image_to_flip->height())
+				if (m_overlay_recording_img->format() != cap_format ||
+					m_overlay_recording_img->width() != cap_width ||
+					m_overlay_recording_img->height() != cap_height)
 				{
 					// Dispose correctly
 					vk::remove_framebuffers_with_image(m_overlay_recording_img.get());
@@ -726,21 +738,32 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			if (!m_overlay_recording_img)
 			{
 				m_overlay_recording_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					VK_IMAGE_TYPE_2D, image_to_flip->format(), image_to_flip->width(), image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+					VK_IMAGE_TYPE_2D, cap_format, cap_width, cap_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 					0, VMM_ALLOCATION_POOL_SYSTEM);
 			}
 
+			const areai rect = areai(0, 0, cap_width, cap_height);
+
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-			const areai rect = areai(0, 0, buffer_width, buffer_height);
-			vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect);
+			if (image_to_flip)
+			{
+				image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+				vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect);
+				image_to_flip->pop_layout(*m_current_command_buffer);
+			}
+			else
+			{
+				// No game frame: clear the base to black before the overlays.
+				VkClearColorValue clear_black{};
+				const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+				vkCmdClearColorImage(*m_current_command_buffer, m_overlay_recording_img->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_black, 1, &range);
+			}
 
-			image_to_flip->pop_layout(*m_current_command_buffer);
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-			vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, buffer_width, buffer_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
+			vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, cap_width, cap_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
 			sshot_fbo->add_ref();
 			render_overlays(sshot_fbo, areau(rect));
 			sshot_fbo->release();
@@ -762,11 +785,11 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 		if (user_asked_for_screenshot)
 		{
-			m_frame->take_screenshot(std::move(sshot_frame), buffer_width, buffer_height, is_bgra);
+			m_frame->take_screenshot(std::move(sshot_frame), cap_width, cap_height, is_bgra);
 		}
 		else
 		{
-			m_frame->present_frame(std::move(sshot_frame), buffer_width * 4, buffer_width, buffer_height, is_bgra);
+			m_frame->present_frame(std::move(sshot_frame), cap_width * 4, cap_width, cap_height, is_bgra);
 		}
 	}
 
