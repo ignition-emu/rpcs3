@@ -112,6 +112,10 @@ IGNITION_PS3_API uint32_t ignition_ps3_audio_rate(const ignition_ps3*);
 
 // RPCS3 states are stop-serialize-reboot, not a step; both block. Zero on
 // success.
+// Whether PS3 firmware is installed, by RPCS3's own detection (dev_flash
+// version.txt). 1 if present, 0 if not. Valid once the instance exists.
+IGNITION_PS3_API int32_t ignition_ps3_firmware_present(ignition_ps3*);
+
 // Installs a PS3 firmware PUP into dev_flash under the configured dirs. Zero on
 // success; negative on a bad or unreadable PUP. Run once before boot.
 IGNITION_PS3_API int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path);

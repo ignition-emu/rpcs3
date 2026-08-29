@@ -7,6 +7,7 @@
 
 #include "Emu/System.h"
 #include "util/logs.hpp"
+#include "util/sysinfo.hpp"
 #include "Utilities/File.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Null/NullGSRender.h"
@@ -803,6 +804,12 @@ uint32_t ignition_ps3_audio_rate(const ignition_ps3* self)
 // Installs a PS3 firmware PUP into dev_flash, the same extraction RPCS3's GUI
 // does: parse the PUP, take file 0x300 (a TAR of dev_flash_* SELFs), decrypt
 // each and extract its inner TAR into the mounted dev_flash. Zero on success.
+int32_t ignition_ps3_firmware_present(ignition_ps3*)
+{
+	// RPCS3's own detection: version.txt under the resolved dev_flash.
+	return utils::get_firmware_version().empty() ? 0 : 1;
+}
+
 int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path)
 {
 	if (!pup_path)
