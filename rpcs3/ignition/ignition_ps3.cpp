@@ -143,6 +143,11 @@ struct ignition_ps3
 	std::mutex mtx;
 	// call_from_main_thread work, drained by the host each pump().
 	std::deque<std::pair<std::function<void()>, atomic_t<u32>*>> work;
+	// The host thread that calls pump(). Work requested from this thread runs
+	// inline (like Qt's AutoConnection on the GUI thread), so a synchronous
+	// BlockingCallFromMainThread from a host tick -- Emu.Pause() does one -- does
+	// not deadlock waiting for a pump that cannot run while it blocks.
+	std::atomic<std::thread::id> pump_thread{};
 
 	// The newest presented frame, written from the RSX thread via the gs frame's
 	// present_frame and read by the host on take_frame.
@@ -385,6 +390,18 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 
 	cb.call_from_main_thread = [self](std::function<void()> func, atomic_t<u32>* wake_up)
 	{
+		// Already on the pump thread: run inline and signal, so a blocking call
+		// from a host tick completes without waiting on a pump it is blocking.
+		if (self->pump_thread.load(std::memory_order_relaxed) == std::this_thread::get_id())
+		{
+			func();
+			if (wake_up)
+			{
+				*wake_up = 1;
+				wake_up->notify_one();
+			}
+			return;
+		}
 		std::lock_guard lock(self->mtx);
 		self->work.emplace_back(std::move(func), wake_up);
 	};
@@ -650,6 +667,7 @@ uint32_t ignition_ps3_pump(ignition_ps3* self)
 	{
 		return 0;
 	}
+	self->pump_thread.store(std::this_thread::get_id(), std::memory_order_relaxed);
 	std::deque<std::pair<std::function<void()>, atomic_t<u32>*>> batch;
 	{
 		std::lock_guard lock(self->mtx);
