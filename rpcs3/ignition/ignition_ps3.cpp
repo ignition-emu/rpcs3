@@ -9,6 +9,7 @@
 #include "util/logs.hpp"
 #include "util/sysinfo.hpp"
 #include "Utilities/File.h"
+#include "Emu/RSX/Overlays/Trophies/overlay_trophy_list_dialog.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
@@ -519,6 +520,94 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 	return cb;
 }
 
+// Emu-side globals used by the RPCS3 Features actions, forward-declared to avoid
+// headers whose serialization templates need a prerequisite include order here.
+extern atomic_t<bool> g_user_asked_for_screenshot;
+bool boot_current_game_savestate(bool testing, u32 index);
+
+namespace
+{
+	void json_escape(std::string& out, std::string_view s)
+	{
+		for (const char c : s)
+		{
+			switch (c)
+			{
+			case '"':  out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default:
+				if (static_cast<unsigned char>(c) < 0x20)
+				{
+					char buf[8];
+					std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+					out += buf;
+				}
+				else
+				{
+					out += c;
+				}
+			}
+		}
+	}
+
+	// Emits each leaf as {path,name,type,value,default,dynamic,options[]}; the host
+	// curates which paths to show. Paths are '/'-joined node names.
+	void dump_cfg(const cfg::_base& node, const std::string& path, std::string& out, bool& first)
+	{
+		if (node.get_type() == cfg::type::node)
+		{
+			for (const auto* child : static_cast<const cfg::node&>(node).get_nodes())
+			{
+				dump_cfg(*child, path.empty() ? child->get_name() : path + "/" + child->get_name(), out, first);
+			}
+			return;
+		}
+
+		if (!first) out += ",";
+		first = false;
+		out += "{\"path\":\"";  json_escape(out, path);
+		out += "\",\"name\":\""; json_escape(out, node.get_name());
+		out += "\",\"type\":";   out += std::to_string(static_cast<int>(node.get_type()));
+		out += ",\"value\":\"";  json_escape(out, node.to_string());
+		out += "\",\"default\":\""; json_escape(out, node.def_to_string());
+		out += "\",\"dynamic\":"; out += node.get_is_dynamic() ? "true" : "false";
+		out += ",\"options\":[";
+		bool of = true;
+		for (const auto& o : node.to_list())
+		{
+			if (!of) out += ",";
+			of = false;
+			out += "\""; json_escape(out, o); out += "\"";
+		}
+		out += "]}";
+	}
+
+	// Resolves a '/'-joined path to a leaf node, or nullptr.
+	cfg::_base* find_cfg(cfg::_base* root, std::string_view path)
+	{
+		cfg::_base* cur = root;
+		for (size_t pos = 0; cur; )
+		{
+			const size_t slash = path.find('/', pos);
+			const std::string_view seg = path.substr(pos, slash == std::string_view::npos ? slash : slash - pos);
+			if (cur->get_type() != cfg::type::node) return nullptr;
+			cfg::_base* next = nullptr;
+			for (auto* child : static_cast<cfg::node*>(cur)->get_nodes())
+			{
+				if (child->get_name() == seg) { next = child; break; }
+			}
+			if (!next) return nullptr;
+			cur = next;
+			if (slash == std::string_view::npos) break;
+			pos = slash + 1;
+		}
+		return cur;
+	}
+}
+
 extern "C" {
 
 uint32_t ignition_ps3_abi_version(void)
@@ -868,8 +957,104 @@ int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path)
 	return 0;
 }
 
-int32_t ignition_ps3_save_state(ignition_ps3*, const char*) { return -1; }
-int32_t ignition_ps3_load_state(ignition_ps3*, const char*) { return -1; }
+// ── Runtime settings ─────────────────────────────────────────────────────────
+
+size_t ignition_ps3_config_dump(ignition_ps3*, char* out, size_t cap)
+{
+	std::string json = "[";
+	bool first = true;
+	dump_cfg(g_cfg, {}, json, first);
+	json += "]";
+	if (out && cap)
+	{
+		const size_t n = std::min(cap - 1, json.size());
+		std::memcpy(out, json.data(), n);
+		out[n] = '\0';
+	}
+	return json.size();
+}
+
+// Applies a setting and persists it the way the GUI does. Returns 0 when it takes
+// effect now (dynamic, or nothing running), 1 when it needs a restart, -1 if the
+// path is not a setting.
+int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* value)
+{
+	if (!path || !value) return -1;
+	cfg::_base* node = find_cfg(&g_cfg, path);
+	if (!node || node->get_type() == cfg::type::node) return -1;
+	const bool needs_restart = !Emu.IsStopped() && !node->get_is_dynamic();
+	node->from_string(value);
+	Emu.SaveSettings(g_cfg.to_string(), Emu.GetTitleID());
+	return needs_restart ? 1 : 0;
+}
+
+// ── RPCS3 Features (the home-menu actions) ───────────────────────────────────
+
+void ignition_ps3_savestate_save(ignition_ps3*)
+{
+	Emu.CallFromMainThread([]()
+	{
+		// Save and continue: reboot straight back in, keeping the window open.
+		if (!g_cfg.savestate.suspend_emu.get())
+		{
+			Emu.after_kill_callback = []() { Emu.Restart(true, false); };
+			Emu.SetContinuousMode(true);
+		}
+		Emu.Kill(false, true);
+	});
+}
+
+// Whether slot `index` (1..max) holds a savestate, without booting it.
+int32_t ignition_ps3_savestate_slot_exists(ignition_ps3*, int32_t index)
+{
+	return boot_current_game_savestate(true, static_cast<u32>(index)) ? 1 : 0;
+}
+
+void ignition_ps3_savestate_load(ignition_ps3*, int32_t index)
+{
+	const u32 slot = static_cast<u32>(index);
+	Emu.CallFromMainThread([slot]() { boot_current_game_savestate(false, slot); });
+}
+
+int32_t ignition_ps3_savestate_max_slots(ignition_ps3*)
+{
+	return static_cast<int32_t>(g_cfg.savestate.max_files.get());
+}
+
+void ignition_ps3_restart(ignition_ps3*)
+{
+	Emu.CallFromMainThread([]()
+	{
+		Emu.SetContinuousMode(true);
+		Emu.Restart(true);
+	});
+}
+
+void ignition_ps3_screenshot(ignition_ps3*)
+{
+	// Polled and saved by the presenter, into <config_dir>/screenshots.
+	g_user_asked_for_screenshot = true;
+}
+
+// Opens RPCS3's native trophy overlay. Returns 1 if a trophy set is loaded.
+int32_t ignition_ps3_open_trophy_list(ignition_ps3*)
+{
+	std::string trop_name;
+	{
+		current_trophy_name& current_id = g_fxo->get<current_trophy_name>();
+		std::lock_guard lock(current_id.mtx);
+		trop_name = current_id.name;
+	}
+	if (trop_name.empty()) return 0;
+	Emu.CallFromMainThread([trop_name]()
+	{
+		if (auto manager = g_fxo->try_get<rsx::overlays::display_manager>())
+		{
+			manager->create<rsx::overlays::trophy_list_dialog>()->show(trop_name);
+		}
+	});
+	return 1;
+}
 
 } // extern "C"
 

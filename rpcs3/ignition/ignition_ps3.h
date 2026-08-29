@@ -120,8 +120,22 @@ IGNITION_PS3_API int32_t ignition_ps3_firmware_present(ignition_ps3*);
 // success; negative on a bad or unreadable PUP. Run once before boot.
 IGNITION_PS3_API int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path);
 
-IGNITION_PS3_API int32_t ignition_ps3_save_state(ignition_ps3*, const char* path);
-IGNITION_PS3_API int32_t ignition_ps3_load_state(ignition_ps3*, const char* path);
+// Runtime settings. config_dump writes a JSON array of every g_cfg leaf
+// ({path,name,type,value,default,dynamic,options}) into out (up to cap-1 bytes,
+// NUL-terminated) and returns the full length; call with a null out to size it.
+// set_config applies and persists a setting by path: 0 = in effect now, 1 = needs
+// a restart, -1 = no such setting.
+IGNITION_PS3_API size_t  ignition_ps3_config_dump(ignition_ps3*, char* out, size_t cap);
+IGNITION_PS3_API int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* value);
+
+// RPCS3 Features: the in-game overlay's actions, driven from the host menu.
+IGNITION_PS3_API void    ignition_ps3_savestate_save(ignition_ps3*);
+IGNITION_PS3_API int32_t ignition_ps3_savestate_slot_exists(ignition_ps3*, int32_t index);
+IGNITION_PS3_API void    ignition_ps3_savestate_load(ignition_ps3*, int32_t index);
+IGNITION_PS3_API int32_t ignition_ps3_savestate_max_slots(ignition_ps3*);
+IGNITION_PS3_API void    ignition_ps3_restart(ignition_ps3*);
+IGNITION_PS3_API void    ignition_ps3_screenshot(ignition_ps3*);
+IGNITION_PS3_API int32_t ignition_ps3_open_trophy_list(ignition_ps3*);
 
 #ifdef __cplusplus
 }
