@@ -1215,6 +1215,10 @@ int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* val
 	else
 	{
 		node->from_string(value);
+		// SaveSettings does not create the custom-configs dir; emu_settings makes
+		// it in LoadSettings (emu_settings.cpp:105). Without this the per-title
+		// write fails ("failed to create temporary file") and the override is lost.
+		fs::create_path(rpcs3::utils::get_custom_config_dir());
 		Emu.SaveSettings(g_cfg.to_string(), Emu.GetTitleID());
 	}
 	return needs_restart ? 1 : 0;
