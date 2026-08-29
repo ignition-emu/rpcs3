@@ -136,11 +136,17 @@ extern "C" char** ignition_macos_font_dirs(int* out_count);
 extern atomic_t<recording_mode> g_recording_mode;
 
 class capture_audio_backend;
+class ignition_gs_frame;
 
 struct ignition_ps3
 {
 	// A window-less NSView+CAMetalLayer RPCS3 renders into (see handle()).
 	void* metal_view = nullptr;
+
+	// The one persistent gs frame, reused across continuous-mode reboots
+	// (save/load/restart) exactly as gui_application reuses m_game_window.
+	// Created on first boot, deleted only in close_gs_frame / module close.
+	ignition_gs_frame* game_window = nullptr;
 
 	std::mutex mtx;
 	// call_from_main_thread work, drained by the host each pump().
@@ -421,8 +427,35 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 		// the null renderer produces no frames, so there is nothing else to pick.
 		g_fxo->init<rsx::thread, named_thread<VKGSRender>>(ar);
 	};
-	cb.get_gs_frame          = []() -> std::unique_ptr<GSFrameBase> { return std::make_unique<ignition_gs_frame>(); };
-	cb.close_gs_frame        = []() {};
+	// Reuse the one persistent frame across continuous-mode reboots, exactly as
+	// gui_application::get_gs_frame reuses m_game_window. The renderer is always
+	// Vulkan here, so only continuous mode / child process gates reuse; a fresh
+	// (non-continuous) boot closes the old frame and makes a new one.
+	cb.get_gs_frame = []() -> std::unique_ptr<GSFrameBase>
+	{
+		if (g_inst && g_inst->game_window)
+		{
+			if (Emu.IsChildProcess() || Emu.ContinuousModeEnabled(true))
+			{
+				return std::unique_ptr<GSFrameBase>(g_inst->game_window);
+			}
+			Emu.GetCallbacks().close_gs_frame();
+		}
+		auto frame = std::make_unique<ignition_gs_frame>();
+		if (g_inst)
+		{
+			g_inst->game_window = frame.get();
+		}
+		return frame;
+	};
+	cb.close_gs_frame = []()
+	{
+		if (g_inst && g_inst->game_window)
+		{
+			delete g_inst->game_window;
+			g_inst->game_window = nullptr;
+		}
+	};
 	cb.get_camera_handler    = []() -> std::shared_ptr<camera_handler_base> { return std::make_shared<null_camera_handler>(); };
 	cb.get_music_handler     = []() -> std::shared_ptr<music_handler_base> { return std::make_shared<null_music_handler>(); };
 
@@ -714,6 +747,12 @@ void ignition_ps3_destroy(ignition_ps3* self)
 	{
 		ignition_ps3_pump(self);
 		Emulator::CleanUp();
+	}
+	// The emulator is stopped, so no GSRender still holds the frame; free it.
+	if (self->game_window)
+	{
+		delete self->game_window;
+		self->game_window = nullptr;
 	}
 	if (self->metal_view)
 	{
