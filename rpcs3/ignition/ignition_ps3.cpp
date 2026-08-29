@@ -410,6 +410,13 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 
 	cb.init_gs_render = [](utils::serial* ar)
 	{
+		// Re-arm frame capture on every boot. g_recording_mode is set to cell in
+		// open(), but ~video_provider() (a g_fxo object) resets it to stopped when
+		// the previous emulation is torn down on a reboot (save/load/restart), and
+		// open() does not run again -- so without this the RSX renders but the
+		// present_frame capture path is gated off and the host video freezes.
+		g_recording_mode = recording_mode::cell;
+
 		// The embed always renders on Vulkan (into the hidden Metal surface);
 		// the null renderer produces no frames, so there is nothing else to pick.
 		g_fxo->init<rsx::thread, named_thread<VKGSRender>>(ar);
