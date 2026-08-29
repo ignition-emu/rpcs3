@@ -23,7 +23,7 @@ extern "C" {
 
 // Bumped whenever this header changes shape. The host refuses a module whose
 // version it does not know, the same guard libretro's API version gives.
-#define IGNITION_PS3_ABI_VERSION 2
+#define IGNITION_PS3_ABI_VERSION 3
 IGNITION_PS3_API uint32_t ignition_ps3_abi_version(void);
 
 typedef struct ignition_ps3 ignition_ps3;
@@ -120,13 +120,27 @@ IGNITION_PS3_API int32_t ignition_ps3_firmware_present(ignition_ps3*);
 // success; negative on a bad or unreadable PUP. Run once before boot.
 IGNITION_PS3_API int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path);
 
-// Runtime settings. config_dump writes a JSON array of every g_cfg leaf
-// ({path,name,type,value,default,dynamic,options}) into out (up to cap-1 bytes,
-// NUL-terminated) and returns the full length; call with a null out to size it.
-// set_config applies and persists a setting by path: 0 = in effect now, 1 = needs
-// a restart, -1 = no such setting.
-IGNITION_PS3_API size_t  ignition_ps3_config_dump(ignition_ps3*, char* out, size_t cap);
-IGNITION_PS3_API int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* value);
+// Runtime settings, mirroring RPCS3's two-layer settings-dialog model. `scope`
+// selects the layer: 0 = global (config.yml, "all PS3 games"), 1 = game (the
+// per-title custom config for the running title, Emu.GetTitleID()).
+//
+// config_dump writes a JSON array of every g_cfg leaf
+// ({path,name,type,value,default,dynamic,options,set_here}) into out (up to cap-1
+// bytes, NUL-terminated) and returns the full length; call with a null out to
+// size it. The `value` is read at `scope`; `set_here` is true when this scope
+// holds a value distinct from what it inherits (game: differs from global;
+// global: differs from the built-in default).
+IGNITION_PS3_API size_t  ignition_ps3_config_dump(ignition_ps3*, int32_t scope, char* out, size_t cap);
+
+// set_config applies and persists one setting by path at `scope`: returns 0 when
+// it takes effect now, 1 when it needs a restart, -1 if the path is no setting.
+IGNITION_PS3_API int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* value, int32_t scope);
+
+// config_reset reverts a whole scope to what it inherits. scope 1 (game): drop
+// this title's custom config so it follows the global layer, applied live. scope
+// 0 (global): reset config.yml to the built-in defaults; and_narrower != 0 also
+// drops this title's custom config so it follows the now-default global.
+IGNITION_PS3_API void    ignition_ps3_config_reset(ignition_ps3*, int32_t scope, int32_t and_narrower);
 
 // RPCS3 Features: the in-game overlay's actions, driven from the host menu.
 IGNITION_PS3_API void    ignition_ps3_savestate_save(ignition_ps3*);

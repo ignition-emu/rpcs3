@@ -59,6 +59,7 @@ target_link_libraries(rpcs3_ignition
 	PRIVATE
 		rpcs3_emu
 		3rdparty::stblib
+		3rdparty::yaml-cpp
 		3rdparty::libevdev
 		3rdparty::hidapi
 		3rdparty::libusb
