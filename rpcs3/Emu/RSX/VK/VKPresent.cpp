@@ -415,7 +415,14 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 			}
 
 			image_to_flip = dst_img.get();
-			m_texture_cache.dispose_reusable_image(dst_img);
+			// Held, not disposed: the flip still has to read this. Disposal runs
+			// cached_image_reference_t's destructor, which sets current_layout
+			// back to UNDEFINED and returns the image to the pool. A hard sync
+			// between here and the present -- which the media-capture path does
+			// on every frame -- drains the present queue, runs that destructor,
+			// and leaves the flip blitting from a recycled image. pop_layout
+			// then tries to restore UNDEFINED and kills the RSX thread.
+			m_present_source_holder = std::move(dst_img);
 		}
 	}
 
@@ -982,6 +989,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	}
 
 	queue_swap_request();
+
+	// The present has read it; hand it back now. Disposal is what resets its
+	// layout and pools it, so it has to happen after the blit, not before.
+	if (m_present_source_holder)
+	{
+		m_texture_cache.dispose_reusable_image(m_present_source_holder);
+	}
 
 	m_frame_stats.flip_time = m_profiler.duration();
 

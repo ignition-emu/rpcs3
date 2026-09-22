@@ -195,6 +195,10 @@ private:
 	std::vector<vk::image*> m_fbo_images;
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
+	// The format-converted present source, held until the flip that reads it is
+	// done. Disposing it earlier hands it to the GC, whose destructor resets its
+	// layout to UNDEFINED and pools it -- and the flip then blits from that.
+	std::unique_ptr<vk::viewable_image> m_present_source_holder;
 
 	//Vertex layout
 	rsx::vertex_input_layout m_vertex_layout;
