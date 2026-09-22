@@ -6,6 +6,7 @@
 #include "ignition_ps3.h"
 
 #include "Emu/System.h"
+#include "Emu/system_progress.hpp"
 #include "util/logs.hpp"
 #include "util/sysinfo.hpp"
 #include "Utilities/File.h"
@@ -936,6 +937,29 @@ ignition_ps3_boot_result ignition_ps3_boot(ignition_ps3* self, const char* game_
 		return static_cast<ignition_ps3_boot_result>(game_boot_result::generic_error);
 	}
 	return static_cast<ignition_ps3_boot_result>(Emu.BootGame(game_path));
+}
+
+int32_t ignition_ps3_progress_of(const ignition_ps3*, ignition_ps3_progress* out)
+{
+	if (!out)
+	{
+		return 0;
+	}
+
+	*out = {};
+
+	const system_progress_snapshot snapshot = get_system_progress();
+	if (!snapshot.active)
+	{
+		return 0;
+	}
+
+	out->active = 1;
+	out->percent = snapshot.percent;
+	// Truncate rather than reject: a long phase name is still worth showing.
+	std::snprintf(out->text, sizeof(out->text), "%s", snapshot.text.c_str());
+	std::snprintf(out->detail, sizeof(out->detail), "%s", snapshot.detail.c_str());
+	return 1;
 }
 
 ignition_ps3_state ignition_ps3_state_of(const ignition_ps3*)

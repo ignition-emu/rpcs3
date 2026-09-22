@@ -23,7 +23,7 @@ extern "C" {
 
 // Bumped whenever this header changes shape. The host refuses a module whose
 // version it does not know, the same guard libretro's API version gives.
-#define IGNITION_PS3_ABI_VERSION 3
+#define IGNITION_PS3_ABI_VERSION 4
 IGNITION_PS3_API uint32_t ignition_ps3_abi_version(void);
 
 typedef struct ignition_ps3 ignition_ps3;
@@ -49,6 +49,19 @@ typedef struct {
     const char* fw_dir;     // installed firmware (dev_flash)
     const char* hdd_dir;    // dev_hdd0, saves
 } ignition_ps3_dirs;
+
+// What RPCS3's progress dialog is showing, for a host that draws it itself.
+// The strings and the percentage are the ones RPCS3 composed for its own
+// dialog, not a second reading of the counters: PPU compilation percent is
+// scaled by how much of the file set has been sized, and the time remaining is
+// smoothed over a history the progress thread keeps. `text` is the phase,
+// `detail` the line beneath it (file/module counts and any time remaining).
+typedef struct {
+    int32_t  active;  // zero when no phase is in flight; the rest is then stale
+    uint32_t percent; // 0-100, as RPCS3 computes it
+    char     text[128];
+    char     detail[256];
+} ignition_ps3_progress;
 
 // One video frame as RSX presented it, owned by the module until the next take.
 typedef struct {
@@ -80,6 +93,10 @@ IGNITION_PS3_API void          ignition_ps3_destroy(ignition_ps3*);
 IGNITION_PS3_API ignition_ps3_boot_result ignition_ps3_boot(ignition_ps3*, const char* game_path);
 
 IGNITION_PS3_API ignition_ps3_state ignition_ps3_state_of(const ignition_ps3*);
+
+// Fills `out` with the current progress and returns non-zero while a phase is
+// in flight. Safe to call every pump; it copies a snapshot under a lock.
+IGNITION_PS3_API int32_t ignition_ps3_progress_of(const ignition_ps3*, ignition_ps3_progress* out);
 IGNITION_PS3_API void ignition_ps3_pause(ignition_ps3*);
 IGNITION_PS3_API void ignition_ps3_resume(ignition_ps3*);
 // Asks the game to exit and returns at once; the state goes STOPPING and

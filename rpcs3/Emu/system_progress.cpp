@@ -12,6 +12,24 @@
 
 LOG_CHANNEL(sys_log, "SYS");
 
+namespace
+{
+	std::mutex g_progress_snapshot_mutex;
+	system_progress_snapshot g_progress_snapshot;
+}
+
+void publish_system_progress(const system_progress_snapshot& snapshot)
+{
+	std::lock_guard lock(g_progress_snapshot_mutex);
+	g_progress_snapshot = snapshot;
+}
+
+system_progress_snapshot get_system_progress()
+{
+	std::lock_guard lock(g_progress_snapshot_mutex);
+	return g_progress_snapshot;
+}
+
 // Progress display server synchronization variables
 lf_array<atomic_ptr<std::string>> g_progr_text_queue;
 progress_dialog_string_t g_progr_text{};
@@ -345,6 +363,10 @@ void progress_dialog_server::operator()()
 					progr = get_localized_string(localized_string_id::PROGRESS_DIALOG_PROGRESS_ANALYZING);
 				}
 
+				// Same values the dialog is about to be given, for a host that
+				// draws the progress itself.
+				publish_system_progress({ text1, progr, value, true });
+
 				// Changes detected, send update
 				if (native_dlg)
 				{
@@ -387,6 +409,8 @@ void progress_dialog_server::operator()()
 			sleep_for = 10'000;
 			wait_no_update_count++;
 		}
+
+		publish_system_progress({});
 
 		if (ppu_cue_refs)
 		{

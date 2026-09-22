@@ -1,6 +1,8 @@
 #pragma once
 
 #include "util/types.hpp"
+
+#include <string>
 #include "util/atomic.hpp"
 #include "Utilities/lockless.h"
 #include "util/shared_ptr.hpp"
@@ -35,6 +37,21 @@ struct alignas(16) progress_dialog_string_t
 		return data.load().text_count != 0;
 	}
 };
+
+// What the progress dialog is showing right now, published by the progress
+// thread after it has composed it. Ignition's embed has no dialogs of its own
+// and draws this itself; reading the composed values keeps one implementation
+// of the arithmetic and the wording rather than a second one in the host.
+struct system_progress_snapshot
+{
+	std::string text;    // the phase, e.g. "Compiling PPU modules"
+	std::string detail;  // the progress line, including any time remaining
+	u32 percent = 0;
+	bool active = false;
+};
+
+void publish_system_progress(const system_progress_snapshot& snapshot);
+system_progress_snapshot get_system_progress();
 
 enum system_progress_stop_state : u32
 {
