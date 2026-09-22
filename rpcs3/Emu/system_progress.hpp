@@ -50,6 +50,11 @@ struct system_progress_snapshot
 	bool active = false;
 };
 
+// Set by a host that draws progress itself from the published snapshot. RPCS3
+// then raises neither its progress dialog nor its compilation overlay: both are
+// RSX overlays, and saying it twice is the least of what that costs.
+extern atomic_t<bool> g_progress_drawn_by_host;
+
 void publish_system_progress(const system_progress_snapshot& snapshot);
 system_progress_snapshot get_system_progress();
 

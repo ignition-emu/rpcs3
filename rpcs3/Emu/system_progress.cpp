@@ -18,6 +18,8 @@ namespace
 	system_progress_snapshot g_progress_snapshot;
 }
 
+atomic_t<bool> g_progress_drawn_by_host{false};
+
 void publish_system_progress(const system_progress_snapshot& snapshot)
 {
 	std::lock_guard lock(g_progress_snapshot_mutex);
@@ -83,6 +85,16 @@ void progress_dialog_server::operator()()
 
 	const auto create_native_dialog = [&native_dlg](const std::string& text, bool* show_overlay_message)
 	{
+		if (g_progress_drawn_by_host)
+		{
+			// The host is showing this; leave the screen to the game.
+			if (show_overlay_message)
+			{
+				*show_overlay_message = false;
+			}
+			return;
+		}
+
 		if (const auto renderer = rsx::get_current_renderer())
 		{
 			// Some backends like OpenGL actually initialize a lot of driver objects in the "on_init" method.
