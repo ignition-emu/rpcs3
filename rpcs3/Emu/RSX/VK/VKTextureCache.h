@@ -511,7 +511,10 @@ namespace vk
 
 		void on_frame_end() override;
 
-		vk::viewable_image* upload_image_simple(vk::command_buffer& cmd, VkFormat format, u32 address, u32 width, u32 height, u32 pitch);
+		// Returns ownership: the caller has to keep this alive for as long as it
+		// reads from it. Disposing it here and handing back a pointer left the
+		// present blitting from an image the GC had already reclaimed.
+		std::unique_ptr<vk::viewable_image> upload_image_simple(vk::command_buffer& cmd, VkFormat format, u32 address, u32 width, u32 height, u32 pitch);
 
 		bool blit(const rsx::blit_src_info& src, const rsx::blit_dst_info& dst, bool interpolate, vk::surface_cache& m_rtts, vk::command_buffer& cmd);
 

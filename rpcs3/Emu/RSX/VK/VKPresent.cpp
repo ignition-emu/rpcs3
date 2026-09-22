@@ -396,7 +396,8 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 		}
 
 		m_texture_cache.invalidate_range(*m_current_command_buffer, range, rsx::invalidation_cause::read);
-		image_to_flip = m_texture_cache.upload_image_simple(*m_current_command_buffer, expected_format, info->address, info->width, info->height, info->pitch);
+		m_present_source_holder = m_texture_cache.upload_image_simple(*m_current_command_buffer, expected_format, info->address, info->width, info->height, info->pitch);
+		image_to_flip = m_present_source_holder.get();
 		g_ignition_present_source = 3;
 	}
 	else if (image_to_flip->format() != expected_format)

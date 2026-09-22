@@ -1613,7 +1613,7 @@ namespace vk
 		reset_frame_statistics();
 	}
 
-	vk::viewable_image* texture_cache::upload_image_simple(vk::command_buffer& cmd, VkFormat format, u32 address, u32 width, u32 height, u32 pitch)
+	std::unique_ptr<vk::viewable_image> texture_cache::upload_image_simple(vk::command_buffer& cmd, VkFormat format, u32 address, u32 width, u32 height, u32 pitch)
 	{
 		bool linear_format_supported = false;
 
@@ -1672,11 +1672,10 @@ namespace vk
 
 		vk::change_image_layout(cmd, image.get(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-		// Fully dispose immediately. These immages aren't really reusable right now.
-		auto result = image.get();
-		vk::get_resource_manager()->dispose(image);
-
-		return result;
+		// Handed to the caller rather than disposed here. Disposal is deferred to
+		// the end of the frame, which is safe only while nothing collects before
+		// then -- and a hard sync mid-flip does, leaving this pointer dangling.
+		return image;
 	}
 
 	bool texture_cache::blit(const rsx::blit_src_info& src, const rsx::blit_dst_info& dst, bool interpolate, vk::surface_cache& m_rtts, vk::command_buffer& cmd)
