@@ -748,6 +748,15 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			image_to_copy = m_overlay_recording_img.get();
 		}
 
+		// DIAGNOSTIC (Ignition): which image the capture path is about to push,
+		// and what it thinks its layout is.
+		rsx_log.error("IGNITION-DIAG capture: flip=0x%x layout=0x%x %dx%d | copy=0x%x layout=0x%x %dx%d | overlay=%d rec=%d",
+			reinterpret_cast<u64>(image_to_flip->value), static_cast<u32>(image_to_flip->current_layout),
+			image_to_flip->width(), image_to_flip->height(),
+			reinterpret_cast<u64>(image_to_copy->value), static_cast<u32>(image_to_copy->current_layout),
+			image_to_copy->width(), image_to_copy->height(),
+			static_cast<u32>(has_overlay), static_cast<u32>(image_to_copy == m_overlay_recording_img.get()));
+
 		image_to_copy->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 		vk::copy_image_to_buffer(*m_current_command_buffer, image_to_copy, &sshot_vkbuf, copy_info);
 		image_to_copy->pop_layout(*m_current_command_buffer);
