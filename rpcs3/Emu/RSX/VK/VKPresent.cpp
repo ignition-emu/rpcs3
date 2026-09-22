@@ -17,6 +17,10 @@ extern atomic_t<recording_mode> g_recording_mode;
 
 namespace
 {
+	// DIAGNOSTIC (Ignition): which branch of get_present_source produced the
+	// image the flip is about to blit from.
+	int g_ignition_present_source = 0;
+
 	VkFormat RSX_display_format_to_vk_format(u8 format)
 	{
 		switch (format)
@@ -304,6 +308,7 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 
 vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surface_info* info, const rsx::avconf& avconfig)
 {
+	g_ignition_present_source = 0;
 	vk::viewable_image* image_to_flip = nullptr;
 
 	// @FIXME: This entire function needs to be rewritten to go through the texture cache's "upload_texture" routine.
@@ -346,6 +351,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 			if (viable)
 			{
 				image_to_flip = section.surface->get_surface(rsx::surface_access::transfer_read);
+				g_ignition_present_source = 1;
 
 				std::tie(info->width, info->height) = rsx::apply_resolution_scale<true>(
 					resolution_scaling_config,
@@ -360,6 +366,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 		// Hack - this should be the first location to check for output
 		// The render might have been done offscreen or in software and a blit used to display
 		image_to_flip = dynamic_cast<vk::viewable_image*>(surface->get_raw_texture());
+		g_ignition_present_source = 2;
 	}
 
 	// The correct output format is determined by the AV configuration set in CellVideoOutConfigure by the game.
@@ -390,6 +397,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 		m_texture_cache.invalidate_range(*m_current_command_buffer, range, rsx::invalidation_cause::read);
 		image_to_flip = m_texture_cache.upload_image_simple(*m_current_command_buffer, expected_format, info->address, info->width, info->height, info->pitch);
+		g_ignition_present_source = 3;
 	}
 	else if (image_to_flip->format() != expected_format)
 	{
@@ -423,6 +431,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 			// and leaves the flip blitting from a recycled image. pop_layout
 			// then tries to restore UNDEFINED and kills the RSX thread.
 			m_present_source_holder = std::move(dst_img);
+			g_ignition_present_source = 4;
 		}
 	}
 
@@ -889,6 +898,10 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 				vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource_range);
 				target_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 			}
+
+			rsx_log.error("IGNITION-DIAG blit src: handle=0x%x layout=0x%x %dx%d source_branch=%d",
+				reinterpret_cast<u64>(image_to_flip->value), static_cast<u32>(image_to_flip->current_layout),
+				image_to_flip->width(), image_to_flip->height(), g_ignition_present_source);
 
 			m_upscaler->scale_output(*m_current_command_buffer, image_to_flip, target_image, target_layout, rgn, UPSCALE_AND_COMMIT | UPSCALE_DEFAULT_VIEW);
 		}
