@@ -245,6 +245,15 @@ namespace vk
 
 		auto layout = m_layout_stack.top();
 		m_layout_stack.pop();
+		// DIAGNOSTIC (Ignition): restoring UNDEFINED throws inside
+		// change_image_layout with nothing said about which image it was.
+		if (layout == VK_IMAGE_LAYOUT_UNDEFINED || layout == VK_IMAGE_LAYOUT_PREINITIALIZED)
+		{
+			rsx_log.error("IGNITION-DIAG pop_layout restoring invalid layout 0x%x: image=%dx%d fmt=0x%x usage=0x%x current=0x%x depth=%d",
+				static_cast<u32>(layout), width(), height(), static_cast<u32>(format()),
+				static_cast<u32>(info.usage), static_cast<u32>(current_layout),
+				static_cast<u32>(m_layout_stack.size()));
+		}
 		change_image_layout(cmd, this, layout);
 	}
 

@@ -120,6 +120,11 @@ namespace vk
 		case VK_IMAGE_LAYOUT_UNDEFINED:
 		case VK_IMAGE_LAYOUT_PREINITIALIZED:
 		default:
+			// DIAGNOSTIC (Ignition): say what was being transitioned before the
+			// throw kills the RSX thread with only a file and line.
+			rsx_log.error("IGNITION-DIAG invalid layout transition: image=0x%x current=0x%x new=0x%x aspect=0x%x levels=%d layers=%d",
+				reinterpret_cast<u64>(image), static_cast<u32>(current_layout), static_cast<u32>(new_layout),
+				static_cast<u32>(range.aspectMask), static_cast<u32>(range.levelCount), static_cast<u32>(range.layerCount));
 			fmt::throw_exception("Attempted to transition to an invalid layout");
 		}
 
