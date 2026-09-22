@@ -13,9 +13,10 @@ jobs:
   build:
     name: PS3 module (macOS arm64)
     runs-on: macos-15
-    # action-gh-release writes; the workflow token defaults to read-only.
+    # Builds and uploads an artifact; it publishes nothing, so it needs no
+    # write access to the repository.
     permissions:
-      contents: write
+      contents: read
     env:
       CCACHE_DIR: /tmp/ccache_dir
       QT_VER: '6.11.1'
@@ -40,20 +41,29 @@ jobs:
       - name: Build module
         run: .ci/build-mac.sh
 
+      # The bare module, for an Ignition checkout to package. It links against
+      # absolute Homebrew paths and loads on no other machine, so it is an input
+      # to a release rather than one.
       - name: Package
         run: |
           dylib=$(find build -name librpcs3_ignition.dylib | head -1)
-          zip -j librpcs3_ignition.dylib.zip "$dylib"
+          zip -j librpcs3_ignition-raw.zip "$dylib"
 
       - name: Upload artifact
         uses: actions/upload-artifact@main
         with:
           name: rpcs3_ignition-macos-arm64
-          path: librpcs3_ignition.dylib.zip
+          path: librpcs3_ignition-raw.zip
           compression-level: 0
 
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/ignition-v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: librpcs3_ignition.dylib.zip
+      # No release step. This workflow used to attach the bare module to the tag
+      # as librpcs3_ignition.dylib.zip -- the same name the packaged bundle is
+      # published under and the name Ignition's manifest pins. It overwrote that
+      # bundle on ignition-v0.1.1 and again on ignition-v0.1.2, roughly twenty
+      # minutes after each upload, and both times the app refused the download:
+      # the checksum no longer matched, and the raw module carries 89 absolute
+      # /opt/homebrew paths that resolve on no machine but the builder's.
+      #
+      # A release asset is now published deliberately, from a bundle that
+      # scripts/package-ps3-module.py has closed over its dependencies. Take the
+      # artifact above as that script's input.
