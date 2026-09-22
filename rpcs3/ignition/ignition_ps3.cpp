@@ -7,6 +7,7 @@
 
 #include "Emu/System.h"
 #include "Emu/system_progress.hpp"
+#include "Emu/RSX/Overlays/overlay_message.h"
 #include "util/logs.hpp"
 #include "util/sysinfo.hpp"
 #include "Utilities/File.h"
@@ -990,12 +991,42 @@ void ignition_ps3_resume(ignition_ps3*) { Emu.Resume(); }
 // the host pump the shutdown through, as it pumps everything else.
 void ignition_ps3_stop(ignition_ps3*)   { Emu.GracefulShutdown(false, true); }
 
+// DIAGNOSTIC (Ignition), env-gated and off by default. The invalid-layout crash
+// needs a native overlay visible while the RSX is flipping -- the combination
+// the media-capture path walks. Compilation used to be the way one appeared, and
+// the embed no longer lets it, so IGNITION_PS3_DIAG_OVERLAY=1 posts a message on
+// a timer instead. It summons the condition; it does not cause the bug.
+static void ignition_diag_overlay(ignition_ps3* self)
+{
+	static const bool enabled = []
+	{
+		const char* v = std::getenv("IGNITION_PS3_DIAG_OVERLAY");
+		return v && v[0] == '1';
+	}();
+	if (!enabled || !Emu.IsRunning())
+	{
+		return;
+	}
+	static u64 last = 0;
+	const u64 now = get_system_time();
+	if (now - last < 3'000'000)
+	{
+		return;
+	}
+	last = now;
+	// Only std::string, localized_string and localized_string_id are
+	// instantiated; a const char* compiles and then fails to link.
+	const std::string text = "Ignition: layout diagnostic";
+	rsx::overlays::queue_message(text, 2'500'000);
+}
+
 uint32_t ignition_ps3_pump(ignition_ps3* self)
 {
 	if (!self)
 	{
 		return 0;
 	}
+	ignition_diag_overlay(self);
 	self->pump_thread.store(std::this_thread::get_id(), std::memory_order_relaxed);
 	std::deque<std::pair<std::function<void()>, atomic_t<u32>*>> batch;
 	{
