@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Utilities/stack_trace.h"
 #include "image_helpers.h"
 #include "image.h"
 #include "../VKRenderPass.h"
@@ -125,6 +126,12 @@ namespace vk
 			rsx_log.error("IGNITION-DIAG invalid layout transition: image=0x%x current=0x%x new=0x%x aspect=0x%x levels=%d layers=%d",
 				reinterpret_cast<u64>(image), static_cast<u32>(current_layout), static_cast<u32>(new_layout),
 				static_cast<u32>(range.aspectMask), static_cast<u32>(range.levelCount), static_cast<u32>(range.layerCount));
+			// The image says nothing about itself -- null handle, zeroed info --
+			// so the caller is the only thing that can identify it.
+			for (const auto& frame : utils::get_backtrace_symbols(utils::get_backtrace(32)))
+			{
+				rsx_log.error("IGNITION-DIAG   %s", frame);
+			}
 			fmt::throw_exception("Attempted to transition to an invalid layout");
 		}
 
