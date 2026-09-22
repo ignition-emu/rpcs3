@@ -878,6 +878,11 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	// RPCS3's LLVM-recompiler defaults.
 	g_cfg.video.renderer.set(video_renderer::vulkan);
 	g_cfg.video.write_color_buffers.set(true);
+	// The host draws compilation progress itself, from ignition_ps3_progress_of.
+	// Leaving RPCS3's own hint on would say it twice, and says it through the
+	// native overlay -- which is the path the frame capture composites, and the
+	// one up 15 ms before the RSX died in the freeze this fixed.
+	g_cfg.misc.show_ppu_compilation_hint.set(false);
 	Emulator::SaveSettings(g_cfg.to_string(), {});
 
 	return self;
