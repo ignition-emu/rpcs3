@@ -13,6 +13,13 @@ git config --global --add safe.directory '*'
 # shellcheck disable=SC2046
 git submodule -q update --init $(awk '/path/ && !/llvm/ && !/opencv/ && !/libsdl-org/ && !/curl/ && !/zlib/ { print $3 }' .gitmodules)
 
+# FFmpeg: an LGPL static build with the codecs RPCS3 uses (see
+# .ci/ignition-ffmpeg), in place of the image's.
+FFMPEG_PREFIX=/rpcs3/build-ffmpeg/install
+.ci/build-ffmpeg-ignition-linux.sh "$FFMPEG_PREFIX"
+FFMPEG_LIBS=$(PKG_CONFIG_PATH="$FFMPEG_PREFIX/lib/pkgconfig" pkg-config --static --libs \
+    libavformat libavcodec libswscale libswresample libavutil | tr ' ' ';')
+
 mkdir -p build && cd build || exit 1
 
 export CC="${CLANG_BINARY}"
@@ -35,6 +42,8 @@ cmake ..                                               \
     -DUSE_SDL=ON                                       \
     -DUSE_SYSTEM_SDL=ON                                \
     -DUSE_SYSTEM_FFMPEG=ON                             \
+    -DFFMPEG_INCLUDE_DIR="$FFMPEG_PREFIX/include"      \
+    -DFFMPEG_LIBRARIES="$FFMPEG_LIBS"                  \
     -DUSE_SYSTEM_OPENAL=OFF                            \
     -DUSE_SYSTEM_OPENCV=ON                             \
     -DUSE_DISCORD_RPC=ON                               \
@@ -58,4 +67,4 @@ command -v python3 > /dev/null || { apt-get update -q && apt-get install -y -q p
 # The limits are Ubuntu 22.04's: glibc 2.35 and GCC 12's libstdc++.
 python3 .ci/package-ignition-linux.py build/rpcs3/ignition/librpcs3_ignition.so \
     "${ARTDIR:-/root/artifacts}/bundle" --source-root . \
-    --max-glibc 2.35 --max-glibcxx 3.4.30
+    --max-glibc 2.35 --max-glibcxx 3.4.30 --ffmpeg-check "$FFMPEG_PREFIX/check_ffmpeg.txt"

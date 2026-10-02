@@ -1,0 +1,11 @@
+# What the Ignition embed's FFmpeg must provide, checked by check_ffmpeg.c.
+# The codecs and formats RPCS3 references (cellAdec/cellAtracXdec/cellVdec,
+# media_utils for cellMusic/cellSearch/cellRec), by the names FFmpeg looks
+# them up by (the MPEG-PS demuxer is "mpeg").
+decoder aac aac_latm atrac3 atrac3al atrac3plus atrac3plusal atrac9 mp3 mp2 mp1 ac3 wmav1 wmav2
+decoder pcm_s16le pcm_s8 pcm_f32le pcm_f32be pcm_mulaw
+decoder h264 mpeg4 mpeg2video mpeg1video mjpeg mjpegb
+decoder dsd_lsbf dsd_msbf dsd_lsbf_planar dsd_msbf_planar flac vorbis opus alac
+encoder pcm_s16le pcm_mulaw pcm_f32be pcm_f32le ac3 aac ffv1 mpeg4 mjpeg
+demuxer h264 m4v mp3 mpegvideo mpeg mjpeg mov avi aac pmp oma wav asf ac3 flac ogg aiff dsf
+muxer avi h264 mjpeg mp4

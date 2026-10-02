@@ -34,12 +34,13 @@ UPSTREAM_LICENCES = [
                            "https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-3.0-only.txt"]),
     (r"opencv_.*\.dll", "opencv", ["https://raw.githubusercontent.com/opencv/opencv/4.x/LICENSE"]),
 ]
-# Linked statically into the module itself. FFmpeg is RPCS3's ffmpeg-core
-# build (LGPL); its copyright file is copied from the submodule as well.
+# Linked statically into the module itself. FFmpeg is the LGPL build of
+# ffmpeg-core's recipe CI makes (.ci/ignition-ffmpeg); ffmpeg-core's copyright
+# file is copied from the submodule as well.
 STATIC_LICENCES = [
     ("llvm", ["https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/LICENSE.TXT"]),
-    ("ffmpeg", ["https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/LICENSE.md",
-                "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.LGPLv2.1"]),
+    ("ffmpeg", ["https://raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1.1/LICENSE.md",
+                "https://raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1.1/COPYING.LGPLv2.1"]),
 ]
 
 
@@ -63,6 +64,15 @@ def is_system(name):
     return lower.startswith(("api-ms-win-", "ext-ms-")) or (SYSTEM32 / name).is_file()
 
 
+def ffmpeg_info(report):
+    if report is None:
+        return None
+    text = report.read_text(errors="replace")
+    if "all required components present" not in text or "NOT LGPL" in text:
+        raise RuntimeError(f"FFmpeg check failed:\n{text}")
+    return dict(re.findall(r"^(license|configuration): (.*?)\r?$", text, re.M))
+
+
 def fetch(url):
     for attempt in range(3):
         try:
@@ -81,6 +91,7 @@ def main():
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--search", type=Path, action="append", default=[],
                         help="A folder the build's own DLLs come from")
+    parser.add_argument("--ffmpeg-check", type=Path, help="check_ffmpeg's report on the FFmpeg linked in")
     args = parser.parse_args()
 
     output = args.output
@@ -151,6 +162,7 @@ def main():
         "source": f"https://github.com/ignition-emu/rpcs3/tree/{source_commit}",
         "input_module_sha256": hashlib.sha256(args.module.read_bytes()).hexdigest(),
         "toolchain": "MSVC, static CRT",
+        "ffmpeg": ffmpeg_info(args.ffmpeg_check),
         "exports": sorted(exports),
     }, indent=2) + "\n")
 

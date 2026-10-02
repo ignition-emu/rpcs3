@@ -126,17 +126,25 @@ UPSTREAM_LICENCES = [
     (r"libQt6.*", "qt", ["https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/LGPL-3.0-only.txt",
                          "https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-2.0-only.txt",
                          "https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-3.0-only.txt"]),
-    (r"lib(av|sw).*", "ffmpeg", ["https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/LICENSE.md",
-                                 "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.LGPLv2.1",
-                                 "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.GPLv2",
-                                 "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.GPLv3"]),
     (r"libSDL3.*", "sdl3", ["https://raw.githubusercontent.com/libsdl-org/SDL/main/LICENSE.txt"]),
     (r"libopencv_.*", "opencv", ["https://raw.githubusercontent.com/opencv/opencv/4.x/LICENSE"]),
 ]
 # Linked statically into the module itself.
 STATIC_LICENCES = [
     ("llvm", ["https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/LICENSE.TXT"]),
+    # The LGPL build .ci/build-ffmpeg-ignition-linux.sh makes.
+    ("ffmpeg", ["https://raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1.1/LICENSE.md",
+                "https://raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1.1/COPYING.LGPLv2.1"]),
 ]
+
+
+def ffmpeg_info(report):
+    if report is None:
+        return None
+    text = report.read_text()
+    if "all required components present" not in text or "NOT LGPL" in text:
+        raise RuntimeError(f"FFmpeg check failed:\n{text}")
+    return dict(re.findall(r"^(license|configuration): (.*)$", text, re.M))
 
 
 def fetch(url):
@@ -212,6 +220,7 @@ def main():
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--max-glibc", help="Oldest host glibc to load on, e.g. 2.35")
     parser.add_argument("--max-glibcxx", help="Oldest host libstdc++ to load on, e.g. 3.4.30")
+    parser.add_argument("--ffmpeg-check", type=Path, help="check_ffmpeg's report on the FFmpeg linked in")
     args = parser.parse_args()
 
     module = args.module.resolve()
@@ -275,10 +284,8 @@ def main():
         "source": f"https://github.com/ignition-emu/rpcs3/tree/{source_commit}",
         "input_module_sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
         "exports": exports,
-        # FFmpeg's own statement of the licence its configuration puts it under.
-        "ffmpeg_license": sorted(set(re.findall(r"(?:L?GPL version [^\x00\n]*)",
-                                                run("strings", str(output / "lib" / next(
-                                                    n for n in bundled if n.startswith("libavutil"))))))),
+        # The statically linked FFmpeg's own avutil_license()/configuration().
+        "ffmpeg": ffmpeg_info(args.ffmpeg_check),
         "requires": {
             "GLIBC": max(filter(None, (symbol_versions(b, "GLIBC") for b in binaries)),
                          key=lambda v: tuple(int(x) for x in v.split("."))),

@@ -24,6 +24,8 @@ on:
       - '.ci/build-mac.sh'
       - '.ci/build-ignition-linux.sh'
       - '.ci/package-ignition-linux.py'
+      - '.ci/build-ffmpeg-ignition-linux.sh'
+      - '.ci/ignition-ffmpeg/**'
       - '.ci/package-ignition-windows.py'
       - 'rpcs3.sln'
       - '.github/workflows/ignition-embed.yml'
@@ -91,6 +93,18 @@ jobs:
             ignition-embed-linux-ccache-
             ignition-standalone-linux-ccache-
 
+      # The LGPL FFmpeg build (.ci/build-ffmpeg-ignition-linux.sh), cached on
+      # what decides it: the script, the option lists and ffmpeg-core's patch.
+      - name: FFmpeg cache key
+        id: ffmpeg-key
+        run: echo "core=$(git rev-parse HEAD:3rdparty/ffmpeg)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore FFmpeg build
+        uses: actions/cache@main
+        with:
+          path: ${{ github.workspace }}/build-ffmpeg/install
+          key: ignition-ffmpeg-linux-${{ hashFiles('.ci/build-ffmpeg-ignition-linux.sh', '.ci/ignition-ffmpeg/options.py', '.ci/ignition-ffmpeg/extra-options.txt') }}-${{ steps.ffmpeg-key.outputs.core }}
+
       # build-linux.sh's image and toolchain; see .ci/build-ignition-linux.sh.
       - name: Build and bundle module
         run: |
@@ -129,7 +143,7 @@ jobs:
                 libgl1 libegl1 libopengl0 libgbm1 libdrm2 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 \
                 libxext6 libxrender1 libxcb1 libxcb-render0 libxcb-shm0 \
                 libasound2$T64 libpulse0 libdbus-1-3 libudev1 libfontconfig1 libfreetype6 \
-                libglib2.0-0$T64 libcurl4$T64 libstdc++6 > /dev/null
+                libglib2.0-0$T64 libcurl4$T64 libstdc++6 libatomic1 > /dev/null
               grep PRETTY_NAME /etc/os-release
               strings /usr/lib/x86_64-linux-gnu/libstdc++.so.6 | grep "^GLIBCXX_3\.4\.[0-9]*$" | sort -V | tail -1
               ldd /a/bundle/librpcs3_ignition.so | grep -v "=> /a/bundle/" || true
@@ -225,6 +239,50 @@ jobs:
           path: ${{ env.DEPS_CACHE_DIR }}
           key: ${{ steps.restore-dependencies-cache.outputs.cache-primary-key }}
 
+      # The LGPL FFmpeg: ffmpeg-core's vcpkg recipe (3rdparty/ffmpeg: its
+      # vcpkg tag, ffmpeg.patch and clang-cl triplet) plus extra-options.txt,
+      # the same list Linux builds. It replaces ffmpeg-core's committed libs
+      # before msbuild. Cached on what decides it.
+      - name: FFmpeg cache key
+        id: ffmpeg-key
+        run: echo "core=$(git rev-parse HEAD:3rdparty/ffmpeg)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore FFmpeg build
+        id: ffmpeg-cache
+        uses: actions/cache@main
+        with:
+          path: ffmpeg-ignition
+          key: ignition-ffmpeg-windows-${{ hashFiles('.ci/ignition-ffmpeg/vcpkg_port.py', '.ci/ignition-ffmpeg/extra-options.txt') }}-${{ steps.ffmpeg-key.outputs.core }}
+
+      - name: Build FFmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          VCPKG=$(cygpath -u "$VCPKG_INSTALLATION_ROOT")
+          (cd "$VCPKG" && git fetch -q origin --tags && git reset -q --hard && git checkout -q tags/2026.06.01)
+          (cd "$VCPKG" && git apply --ignore-space-change --ignore-whitespace --3way "$GITHUB_WORKSPACE/3rdparty/ffmpeg/ffmpeg.patch")
+          python .ci/ignition-ffmpeg/vcpkg_port.py "$VCPKG/ports/ffmpeg/portfile.cmake"
+          "$VCPKG/vcpkg" --overlay-triplets=3rdparty/ffmpeg/triplets install "ffmpeg[avcodec,avfilter,avdevice,avformat,swresample,swscale]:x64-win-llvm-static-release"
+          mkdir -p ffmpeg-ignition
+          cp -r "$VCPKG/packages/ffmpeg_x64-win-llvm-static-release/lib" "$VCPKG/packages/ffmpeg_x64-win-llvm-static-release/include" ffmpeg-ignition/
+          ls -l ffmpeg-ignition/lib
+
+      - name: Use FFmpeg build
+        run: |
+          cp ffmpeg-ignition/lib/*.lib 3rdparty/ffmpeg/lib/windows/x86_64/
+          cp -r ffmpeg-ignition/include/. 3rdparty/ffmpeg/include/
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Check FFmpeg
+        shell: cmd
+        run: |
+          cl /nologo /MT /I3rdparty\ffmpeg\include .ci\ignition-ffmpeg\check_ffmpeg.c /Fe:ffmpeg-ignition\check_ffmpeg.exe /link 3rdparty\ffmpeg\lib\windows\x86_64\avformat.lib 3rdparty\ffmpeg\lib\windows\x86_64\avcodec.lib 3rdparty\ffmpeg\lib\windows\x86_64\swresample.lib 3rdparty\ffmpeg\lib\windows\x86_64\avutil.lib bcrypt.lib ws2_32.lib secur32.lib ole32.lib user32.lib psapi.lib strmiids.lib uuid.lib oleaut32.lib shlwapi.lib
+          ffmpeg-ignition\check_ffmpeg.exe .ci\ignition-ffmpeg\required.txt > ffmpeg-ignition\check_ffmpeg.txt
+          set code=%ERRORLEVEL%
+          type ffmpeg-ignition\check_ffmpeg.txt
+          exit /b %code%
+
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@main
 
@@ -243,7 +301,8 @@ jobs:
         run: |
           python -m pip install --quiet pefile
           python .ci/package-ignition-windows.py bin/ignition/rpcs3_ignition.dll "$ARTIFACTS/bundle" \
-            --source-root . --search "$QTDIR/bin" --search 3rdparty/opencv/opencv/opencv414/build/x64/bin
+            --source-root . --search "$QTDIR/bin" --search 3rdparty/opencv/opencv/opencv414/build/x64/bin \
+            --ffmpeg-check ffmpeg-ignition/check_ffmpeg.txt
 
       # LoadLibraryEx with the DLL's own directory searched (and the system's,
       # not PATH): how rpcs3-host loads it.
