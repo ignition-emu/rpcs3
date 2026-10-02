@@ -9,7 +9,6 @@ find_package(Qt6 COMPONENTS Core Gui REQUIRED)
 # Ignition host, the same arm's-length arrangement the libretro cores use.
 add_library(rpcs3_ignition SHARED
 	ignition_ps3.cpp
-	ignition_metal.mm
 
 	# Version glue the emu references.
 	${CMAKE_CURRENT_SOURCE_DIR}/../rpcs3_version.cpp
@@ -79,9 +78,35 @@ else()
 endif()
 
 if(APPLE)
+	target_sources(rpcs3_ignition PRIVATE ignition_metal.mm)
 	target_link_libraries(rpcs3_ignition PRIVATE iconv "-framework CoreVideo" "-framework Foundation" "-framework AppKit" "-framework QuartzCore" "-framework Metal")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_link_libraries(rpcs3_ignition PRIVATE rt)
+
+	# rpcs3/CMakeLists.txt defines these for its own directory only, and
+	# display.h's handle type must be the one rpcs3_emu was built with. X11 is
+	# also what rpcs3_emu's X11 swapchain links, and the hidden-window fallback.
+	find_package(X11)
+	if(X11_FOUND)
+		target_compile_definitions(rpcs3_ignition PRIVATE HAVE_X11)
+		target_sources(rpcs3_ignition PRIVATE ignition_x11.cpp)
+		target_link_libraries(rpcs3_ignition PRIVATE X11::X11)
+	endif()
+	find_package(Wayland)
+	if(WAYLAND_FOUND)
+		target_compile_definitions(rpcs3_ignition PRIVATE HAVE_WAYLAND)
+		target_include_directories(rpcs3_ignition SYSTEM PRIVATE ${WAYLAND_INCLUDE_DIR})
+	endif()
+
+	# Export the ABI and nothing else, bind the module's own references to its
+	# own definitions, and refuse to link with anything left unresolved: a
+	# shared object otherwise defers that to the host's dlopen.
+	target_link_options(rpcs3_ignition PRIVATE
+		"-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/ignition_ps3.map"
+		"-Wl,--exclude-libs,ALL"
+		"-Wl,-Bsymbolic"
+		"-Wl,--no-undefined")
+	set_target_properties(rpcs3_ignition PROPERTIES LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ignition_ps3.map")
 endif()
 
 target_compile_features(rpcs3_ignition PRIVATE cxx_std_23)

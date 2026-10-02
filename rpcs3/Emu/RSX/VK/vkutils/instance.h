@@ -13,6 +13,12 @@
 
 namespace vk
 {
+	// Set by a host that takes every frame through the RSX capture path
+	// (GSFrameBase::present_frame) and has no window to present to. The
+	// swapchain is then a set of plain images and no surface is created.
+	// Set before the renderer is created.
+	extern bool g_offscreen_present;
+
 	class supported_extensions
 	{
 	private:

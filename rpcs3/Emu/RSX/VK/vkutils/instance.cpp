@@ -282,8 +282,90 @@ namespace vk
 		return gpus;
 	}
 
+	bool g_offscreen_present = false;
+
+	// Swapchain images that are never shown: frames leave through the RSX
+	// capture path. A native swapchain with no present queue, so the renderer
+	// takes its headless branch, minus the per-frame readback a native window
+	// blit needs.
+	class swapchain_offscreen final : public native_swapchain_base
+	{
+	public:
+		using native_swapchain_base::native_swapchain_base;
+
+		void create(display_handle_t& /*window_handle*/) override {}
+
+		bool init() override
+		{
+			if (!swapchain_images.empty())
+			{
+				destroy(false);
+			}
+
+			if (m_width == 0 || m_height == 0)
+			{
+				rsx_log.error("Invalid offscreen swapchain dimensions %d x %d", m_width, m_height);
+				return false;
+			}
+
+			init_swapchain_images(dev, 3);
+			return true;
+		}
+
+		void destroy(bool full = true) override
+		{
+			swapchain_images.clear();
+
+			if (full)
+			{
+				dev.destroy();
+			}
+		}
+
+		void end_frame(command_buffer& /*cmd*/, u32 /*index*/) override {}
+
+		VkResult present(VkSemaphore /*semaphore*/, u32 index) override
+		{
+			swapchain_images[index].first = false;
+			return VK_SUCCESS;
+		}
+	};
+
+	static swapchain_base* create_offscreen_swapchain(vk::physical_device& dev)
+	{
+		u32 graphics_queue_idx = umax;
+		u32 transfer_queue_idx = umax;
+
+		for (u32 i = 0; i < dev.get_queue_count(); ++i)
+		{
+			const auto flags = dev.get_queue_properties(i).queueFlags;
+			if (graphics_queue_idx == umax && (flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) == (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
+			{
+				graphics_queue_idx = i;
+			}
+			else if (transfer_queue_idx == umax && (flags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) == (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT))
+			{
+				transfer_queue_idx = i;
+			}
+		}
+
+		if (graphics_queue_idx == umax)
+		{
+			rsx_log.fatal("Failed to find a suitable graphics queue");
+			return nullptr;
+		}
+
+		rsx_log.notice("Offscreen presentation: no window surface, frames are captured only");
+		return new swapchain_offscreen(dev, -1, graphics_queue_idx, transfer_queue_idx);
+	}
+
 	swapchain_base* instance::create_swapchain(display_handle_t window_handle, vk::physical_device& dev)
 	{
+		if (g_offscreen_present)
+		{
+			return create_offscreen_swapchain(dev);
+		}
+
 		WSI_config surface_config
 		{
 			.supports_automatic_wm_reports = true

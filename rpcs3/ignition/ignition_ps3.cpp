@@ -1,6 +1,6 @@
 // The ignition PS3 embed: a Qt-free frontend over rpcs3_emu, exposed through the
 // C ABI in ignition_ps3.h. Boots a title, services the pump, and hands the host
-// video (via a hidden Metal surface), audio (a capturing backend) and input (an
+// video (read back from the RSX; see handle()), audio (a capturing backend) and input (an
 // LDD pad). See docs/ps3-rpcs3-embed.md in the Ignition repo.
 
 #include "ignition_ps3.h"
@@ -58,9 +58,36 @@
 #include <thread>
 #include <utility>
 
+// Xlib's macros, which VKGSRender.h brings in through the X11 swapchain, collide
+// with Qt's declarations; nothing below uses them.
+#if defined(HAVE_X11)
+#undef None
+#undef Bool
+#undef Status
+#undef Success
+#undef Always
+#undef True
+#undef False
+#undef CursorShape
+#undef FocusIn
+#undef FocusOut
+#undef KeyPress
+#undef KeyRelease
+#undef Expose
+#undef FontChange
+#undef Unsorted
+#undef GrayScale
+#undef Above
+#undef Below
+#undef DestroyAll
+#endif
+
 // Last: pulls <QObject>, whose keyword macros mangle the emu headers if it lands
 // before them. Only make_callbacks below needs it.
 #include "rpcs3qt/localized_emu.h"
+#ifndef __APPLE__
+#include <QStandardPaths>
+#endif
 
 // rpcs3_emu calls this and leaves the frontend to define it. The GUI logs it to
 // a dialog; here it goes to stderr, which is where a host running headless looks.
@@ -129,12 +156,26 @@ namespace
 	}
 }
 
-// A hidden, off-screen Metal surface (ignition_metal.mm) and RPCS3's recording
-// flag, both driven module-side so the Vulkan path renders with no window and
-// hands frames back through present_frame -- no changes to the emulator.
+// The surface RPCS3 renders into, and its recording flag, which hands every
+// frame back through present_frame. On macOS a hidden, off-screen Metal surface
+// (ignition_metal.mm) with no change to the emulator. Elsewhere no surface at
+// all: vk::g_offscreen_present makes the swapchain plain images. On Linux,
+// IGNITION_PS3_SURFACE=x11 instead renders into a hidden X11 window
+// (ignition_x11.cpp), the Metal arrangement's equivalent, kept for comparison.
+#ifdef __APPLE__
 extern "C" void* ignition_make_hidden_metal_view(int width, int height);
 extern "C" void ignition_release_metal_view(void* view);
 extern "C" char** ignition_macos_font_dirs(int* out_count);
+#endif
+#if defined(__linux__) && defined(HAVE_X11)
+extern "C" void* ignition_x11_create_window(int width, int height, unsigned long* window);
+extern "C" void* ignition_x11_open_display();
+extern "C" void ignition_x11_destroy_window(void* display, unsigned long window);
+#endif
+#ifdef __linux__
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#endif
 extern atomic_t<recording_mode> g_recording_mode;
 
 class capture_audio_backend;
@@ -144,6 +185,11 @@ struct ignition_ps3
 {
 	// A window-less NSView+CAMetalLayer RPCS3 renders into (see handle()).
 	void* metal_view = nullptr;
+
+	// The hidden X11 window of the IGNITION_PS3_SURFACE=x11 fallback, on a
+	// connection the module keeps open so the window outlives each renderer.
+	void* x11_display = nullptr;
+	unsigned long x11_window = 0;
 
 	// The one persistent gs frame, reused across continuous-mode reboots
 	// (save/load/restart) exactly as gui_application reuses m_game_window.
@@ -545,9 +591,23 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 	cb.get_photo_path    = [](std::string_view) -> std::string { return {}; };
 	cb.get_image_info    = [](const std::string&, std::string&, s32&, s32&, s32&) { return false; };
 	cb.get_scaled_image  = [](const std::string&, s32, s32, s32&, s32&, u8*, bool) { return false; };
-	// Same dirs Qt's QStandardPaths::FontsLocation yields, queried from the OS
-	// (see ignition_macos_font_dirs) so overlay text has glyphs to draw.
+	// Same dirs Qt's QStandardPaths::FontsLocation yields, so overlay text has
+	// glyphs to draw: on macOS queried from the OS (ignition_macos_font_dirs),
+	// elsewhere from QtCore itself, as main_application does.
 	cb.get_font_dirs     = []() -> std::vector<std::string> {
+#ifndef __APPLE__
+		std::vector<std::string> font_dirs;
+		for (const QString& location : QStandardPaths::standardLocations(QStandardPaths::FontsLocation))
+		{
+			std::string font_dir = location.toStdString();
+			if (!font_dir.ends_with('/'))
+			{
+				font_dir += '/';
+			}
+			font_dirs.push_back(std::move(font_dir));
+		}
+		return font_dirs;
+#else
 		int count = 0;
 		char** dirs = ignition_macos_font_dirs(&count);
 		std::vector<std::string> result;
@@ -558,6 +618,7 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 		}
 		free(dirs);
 		return result;
+#endif
 	};
 	cb.on_install_pkgs   = [](const std::vector<std::string>&) { return false; };
 	cb.enable_gamemode   = [](bool) {};
@@ -836,16 +897,58 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	auto* self = new ignition_ps3();
 	g_inst = self;
 
-	// Create the hidden Metal surface on the caller's thread (main), and turn on
-	// RPCS3's frame-capture path so the RSX hands each flip to present_frame.
+	// Create the surface on the caller's thread (main), and turn on RPCS3's
+	// frame-capture path so the RSX hands each flip to present_frame.
+#ifdef __APPLE__
 	self->metal_view = ignition_make_hidden_metal_view(1280, 720);
+#else
+#if defined(__linux__) && defined(HAVE_X11)
+	if (const char* surface = ::getenv("IGNITION_PS3_SURFACE"); surface && std::string_view(surface) == "x11")
+	{
+		self->x11_display = ignition_x11_create_window(1280, 720, &self->x11_window);
+		if (!self->x11_display)
+		{
+			std::fprintf(stderr, "[rpcs3] IGNITION_PS3_SURFACE=x11: no X display; rendering offscreen\n");
+		}
+	}
+#endif
+	vk::g_offscreen_present = !self->x11_display;
+#endif
 	g_recording_mode = recording_mode::cell;
+
+#ifdef __linux__
+	// What RPCS3's own main() sets for the process before it runs a game. The
+	// open-file limit is only raised, never lowered: it is the host's process.
+	if (struct rlimit rlim{}; ::getrlimit(RLIMIT_NOFILE, &rlim) == 0 && rlim.rlim_cur < 4096)
+	{
+		rlim.rlim_cur = std::min<rlim_t>(4096, rlim.rlim_max);
+		::setrlimit(RLIMIT_NOFILE, &rlim);
+	}
+	if (struct rlimit rlim{}; ::getrlimit(RLIMIT_MEMLOCK, &rlim) == 0 && rlim.rlim_cur < 0x80000000)
+	{
+		rlim.rlim_cur = std::min<rlim_t>(0x80000000, rlim.rlim_max);
+		::setrlimit(RLIMIT_MEMLOCK, &rlim);
+	}
+	// Precise timers, as stock; inherited by the emulator threads this thread starts.
+	::prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+#endif
 
 	// Root RPCS3 under Ignition's system dir rather than the global one. Set
 	// before Init, which is when get_config_dir first resolves.
 	if (dirs && dirs->config_dir && dirs->config_dir[0])
 	{
+#ifdef _WIN32
+		// fs::get_config_dir keeps RPCS3_CONFIG_DIR only up to its last '/'.
+		std::string config_dir = dirs->config_dir;
+		std::replace(config_dir.begin(), config_dir.end(), '\\', '/');
+		if (!config_dir.ends_with('/'))
+		{
+			config_dir += '/';
+		}
+		::_putenv_s("RPCS3_CONFIG_DIR", config_dir.c_str());
+#else
 		::setenv("RPCS3_CONFIG_DIR", dirs->config_dir, 1);
+#endif
 	}
 
 	Emu.SetHasGui(false);
@@ -924,11 +1027,21 @@ void ignition_ps3_destroy(ignition_ps3* self)
 		delete self->game_window;
 		self->game_window = nullptr;
 	}
+#ifdef __APPLE__
 	if (self->metal_view)
 	{
 		ignition_release_metal_view(self->metal_view);
 		self->metal_view = nullptr;
 	}
+#endif
+#if defined(__linux__) && defined(HAVE_X11)
+	if (self->x11_display)
+	{
+		ignition_x11_destroy_window(self->x11_display, self->x11_window);
+		self->x11_display = nullptr;
+		self->x11_window = 0;
+	}
+#endif
 	if (g_inst == self)
 	{
 		g_inst = nullptr;
@@ -1394,11 +1507,24 @@ void qt_events_aware_op(int repeat_duration_ms, std::function<bool()> wrapped_op
 
 // Writes the frame the RSX just handed back into the live instance's buffer.
 // Called on the RSX thread; the mutex guards against the host's take_frame.
-// The hidden Metal surface RPCS3 renders into; created in create() on the main
-// thread, returned here on the RSX thread.
+// The surface RPCS3 renders into, created in create() on the main thread and
+// returned here on the RSX thread.
 display_handle_t ignition_gs_frame::handle() const
 {
+#ifdef __APPLE__
 	return g_inst ? g_inst->metal_view : nullptr;
+#else
+#if defined(__linux__) && defined(HAVE_X11)
+	// The renderer takes ownership of the connection it is handed and closes
+	// it when it is destroyed, so each renderer gets its own, as gs_frame does.
+	if (g_inst && g_inst->x11_display)
+	{
+		return std::pair<Display*, Window>{static_cast<Display*>(ignition_x11_open_display()), g_inst->x11_window};
+	}
+#endif
+	// Offscreen: the swapchain reads no handle (vk::g_offscreen_present).
+	return display_handle_t{};
+#endif
 }
 
 void ignition_gs_frame::present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra) const

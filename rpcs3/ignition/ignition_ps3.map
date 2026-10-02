@@ -1,0 +1,9 @@
+/* The module's only exports: the C ABI in ignition_ps3.h. Everything else,
+   including the statically linked LLVM, stays local, so neither collides with
+   a copy the host process has already loaded (Mesa's libLLVM, for one). */
+{
+  global:
+    ignition_ps3_*;
+  local:
+    *;
+};
