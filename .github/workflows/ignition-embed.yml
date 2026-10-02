@@ -257,9 +257,12 @@ jobs:
       - name: Build FFmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: |
-          VCPKG=$(cygpath -u "$VCPKG_INSTALLATION_ROOT")
-          (cd "$VCPKG" && git fetch -q origin --tags && git reset -q --hard && git checkout -q tags/2026.06.01)
-          (cd "$VCPKG" && git apply --ignore-space-change --ignore-whitespace --3way "$GITHUB_WORKSPACE/3rdparty/ffmpeg/ffmpeg.patch")
+          # A vcpkg of the tag ffmpeg-core builds with, bootstrapped to match it
+          # (the image's own vcpkg tool rejects that tag's tool data).
+          git clone -q --depth 1 --branch 2026.06.01 https://github.com/microsoft/vcpkg vcpkg-ffmpeg
+          VCPKG="$GITHUB_WORKSPACE/vcpkg-ffmpeg"
+          (cd vcpkg-ffmpeg && cmd.exe //c "bootstrap-vcpkg.bat -disableMetrics")
+          (cd "$VCPKG" && git apply --ignore-space-change --ignore-whitespace "$GITHUB_WORKSPACE/3rdparty/ffmpeg/ffmpeg.patch")
           python .ci/ignition-ffmpeg/vcpkg_port.py "$VCPKG/ports/ffmpeg/portfile.cmake"
           "$VCPKG/vcpkg" --overlay-triplets=3rdparty/ffmpeg/triplets install "ffmpeg[avcodec,avfilter,avdevice,avformat,swresample,swscale]:x64-win-llvm-static-release"
           mkdir -p ffmpeg-ignition
