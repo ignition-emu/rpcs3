@@ -93,6 +93,25 @@
 // a dialog; here it goes to stderr, which is where a host running headless looks.
 // Globals the emu and pad system read, defined in RPCS3's app main (rpcs3.cpp)
 // which the module replaces.
+#ifdef _WIN32
+#include "Utilities/StrUtil.h"
+
+// WolfSSL's user_settings.h on Windows routes its file access through these,
+// which the frontend implements (rpcs3qt/curl_handle.cpp in the app).
+extern "C"
+{
+FILE* wolfSSL_fopen_utf8(const char* name, const char* mode)
+{
+	return _wfopen(utf8_to_wchar(name).c_str(), utf8_to_wchar(mode).c_str());
+}
+
+int wolfSSL_stat_utf8(const char* path, struct _stat* buffer)
+{
+	return _wstat(utf8_to_wchar(path).c_str(), buffer);
+}
+}
+#endif
+
 // Defined at end of file; declared here for init_pad_handler above.
 void qt_events_aware_op(int repeat_duration_ms, std::function<bool()> wrapped_op);
 
@@ -173,6 +192,7 @@ extern "C" void* ignition_x11_open_display();
 extern "C" void ignition_x11_destroy_window(void* display, unsigned long window);
 #endif
 #ifdef __linux__
+#include <dlfcn.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #endif
@@ -931,6 +951,13 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	}
 	// Precise timers, as stock; inherited by the emulator threads this thread starts.
 	::prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+	// The PPU JIT links the C maths calls its code makes (log2f, ...) by
+	// looking them up among the process's global symbols (JITLLVM.cpp,
+	// findSymbol), where the stock executable has libm. Loaded only as this
+	// module's dependency, libm is not global unless the host links it too,
+	// and a missing one becomes a "Null function" that kills the calling
+	// thread (Skate 3's render thread, under rpcs3_probe).
+	::dlopen("libm.so.6", RTLD_NOW | RTLD_GLOBAL);
 #endif
 
 	// Root RPCS3 under Ignition's system dir rather than the global one. Set

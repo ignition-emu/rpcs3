@@ -34,10 +34,12 @@ UPSTREAM_LICENCES = [
                            "https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-3.0-only.txt"]),
     (r"opencv_.*\.dll", "opencv", ["https://raw.githubusercontent.com/opencv/opencv/4.x/LICENSE"]),
 ]
-# Linked statically into the module itself (FFmpeg's licence comes with its
-# submodule, through the 3rdparty sweep).
+# Linked statically into the module itself. FFmpeg is RPCS3's ffmpeg-core
+# build (LGPL); its copyright file is copied from the submodule as well.
 STATIC_LICENCES = [
     ("llvm", ["https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/LICENSE.TXT"]),
+    ("ffmpeg", ["https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/LICENSE.md",
+                "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.LGPLv2.1"]),
 ]
 
 
@@ -122,6 +124,10 @@ def main():
             target = rpcs3 / file.relative_to(args.source_root)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file, target)
+    ffmpeg_copyright = args.source_root / "3rdparty/ffmpeg/copyright"
+    if ffmpeg_copyright.is_file():
+        (licences / "upstream/ffmpeg").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ffmpeg_copyright, licences / "upstream/ffmpeg/copyright")
     unlicensed = [n for n in bundled if not any(re.fullmatch(p, n) for p, _, _ in UPSTREAM_LICENCES)]
     if unlicensed:
         raise RuntimeError(f"No licence source for {unlicensed}")
