@@ -118,11 +118,14 @@ def main():
             else:
                 raise RuntimeError(f"{name} is neither the build's nor the system's")
 
-    # Besides the ABI, emucore's OpenGL.cpp exports the hybrid-GPU hints
-    # drivers read from an executable; from a DLL they are inert.
+    # Besides the ABI, static libraries built for the app export what they
+    # mark dllexport: emucore's OpenGL.cpp the hybrid-GPU hints drivers read
+    # from an executable, hidapi its API, LLVM the GDB JIT interface. Windows
+    # does not interpose exports, so from a DLL loaded by path they are inert.
     _, exports = imports(output / MODULE)
-    inert = {"NvOptimusEnablement", "AmdPowerXpressRequestHighPerformance"}
-    if not exports or any(not e.startswith("ignition_ps3_") and e not in inert for e in exports):
+    inert = {"NvOptimusEnablement", "AmdPowerXpressRequestHighPerformance",
+             "__jit_debug_descriptor", "__jit_debug_register_code"}
+    if not exports or any(not e.startswith(("ignition_ps3_", "hid_")) and e not in inert for e in exports):
         raise RuntimeError(f"Unexpected exports: {exports}")
 
     licences = output / "licenses"
