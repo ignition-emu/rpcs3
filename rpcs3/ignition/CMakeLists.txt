@@ -99,7 +99,10 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		"-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/ignition_ps3.map"
 		"-Wl,--exclude-libs,ALL"
 		"-Wl,-Bsymbolic"
-		"-Wl,--no-undefined")
+		"-Wl,--no-undefined"
+		# The __start_/__stop_ symbols the linker makes for named sections
+		# (protobuf's pb_defaults) are exported by default.
+		"-Wl,-z,start-stop-visibility=hidden")
 	set_target_properties(rpcs3_ignition PROPERTIES LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ignition_ps3.map")
 endif()
 
