@@ -17,8 +17,10 @@ git submodule -q update --init $(awk '/path/ && !/llvm/ && !/opencv/ && !/libsdl
 # .ci/ignition-ffmpeg), in place of the image's.
 FFMPEG_PREFIX=/rpcs3/build-ffmpeg/install
 .ci/build-ffmpeg-ignition-linux.sh "$FFMPEG_PREFIX"
+# libatomic, which FFmpeg's link line asks for, is taken static like the C++
+# runtime, so the host need not have it.
 FFMPEG_LIBS=$(PKG_CONFIG_PATH="$FFMPEG_PREFIX/lib/pkgconfig" pkg-config --static --libs \
-    libavformat libavcodec libswscale libswresample libavutil | tr ' ' ';')
+    libavformat libavcodec libswscale libswresample libavutil | sed 's/-latomic/-l:libatomic.a/g' | tr ' ' ';')
 
 mkdir -p build && cd build || exit 1
 
