@@ -367,7 +367,9 @@ jobs:
           - \`$linux\` sha256 \`$linux_sha\`: loads on Ubuntu 22.04 and newer (glibc 2.35, GCC 12's libstdc++); see bundle.json for the libraries left to the host.
           - \`$windows\` sha256 \`$windows_sha\`: MSVC, static CRT; the Vulkan loader is the system's.
 
-          Each archive carries release.json (source commit, input module checksum), bundle.json and the licences of everything bundled. The macOS module is not part of this release.
+          Each archive carries release.json (source commit, input module checksum, the FFmpeg licence and configuration), bundle.json and the licences of everything bundled. FFmpeg is an LGPL build with the codecs RPCS3 uses (.ci/ignition-ffmpeg). The macOS module is not part of this release.
+
+          Known issue, under investigation: Skate 3 once stalled before its intro movie (1 boot in 6 on Linux; video stops, audio continues, no decoder involved); the other boots played through.
           NOTES
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md
