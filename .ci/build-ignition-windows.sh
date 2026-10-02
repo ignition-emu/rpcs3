@@ -55,9 +55,12 @@ ninja rpcs3_ignition
 
 cd ..
 
-MODULE=$(find build -name rpcs3_ignition.dll | head -1)
+# MinGW names the target librpcs3_ignition.dll; ship it under the name the
+# host looks for.
+MODULE=$(find build -name 'librpcs3_ignition.dll' -o -name 'rpcs3_ignition.dll' | head -1)
+test -n "$MODULE"
 mkdir -p "$OUT"
-cp "$MODULE" "$OUT/"
+cp "$MODULE" "$OUT/rpcs3_ignition.dll"
 
 # The MSYS2 DLLs it needs, next to it. vulkan-1.dll is the system's loader,
 # which finds the system's drivers; the bundle must not carry its own.
