@@ -3,8 +3,9 @@
 # it); Linux x86_64 is bundled here, in the image it was built in, by
 # .ci/package-ignition-linux.py, and the bundle is then loaded in a clean
 # container that has only the system libraries the bundle leaves to the host.
-# Windows x64 is built under MSYS2 clang64 and its DLLs gathered beside it by
-# .ci/build-ignition-windows.sh, then loaded the way the host loads it.
+# Windows x64 is built with MSVC from rpcs3.sln, as upstream's releases are
+# (static CRT), bundled by .ci/package-ignition-windows.py, then loaded the way
+# the host loads it.
 name: Ignition embed
 
 on:
@@ -19,7 +20,8 @@ on:
       - '.ci/build-mac.sh'
       - '.ci/build-ignition-linux.sh'
       - '.ci/package-ignition-linux.py'
-      - '.ci/build-ignition-windows.sh'
+      - '.ci/package-ignition-windows.py'
+      - 'rpcs3.sln'
       - '.github/workflows/ignition-embed.yml'
 
 jobs:
@@ -142,77 +144,108 @@ jobs:
 
   windows-x64:
     name: Ignition module (Windows x64)
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     permissions:
       contents: read
+    defaults:
+      run:
+        shell: bash
+    # upstream's Windows_Build (rpcs3.yml): the same toolchain, dependencies
+    # and scripts, building the rpcs3_ignition project instead of the app.
     env:
+      COMPILER: msvc
+      QT_VER_MAIN: '6'
+      QT_VER: '6.11.2'
+      QT_VER_MSVC: 'msvc2022'
+      QT_DATE: '202608131017'
+      LLVM_VER: '22.1.8'
+      VULKAN_VER: '1.4.341.1'
+      VULKAN_SDK_SHA: 'bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe'
+      CCACHE_SHA: '859141059ac950e1e8cd042c66f842f26b9e3a62a1669a69fe6ba180cb58bbdf'
+      CCACHE_BIN_DIR: 'C:\ccache_bin'
       CCACHE_DIR: 'C:\ccache'
+      CCACHE_INODECACHE: 'true'
+      CCACHE_SLOPPINESS: 'time_macros'
+      DEPS_CACHE_DIR: ./dependency_cache
+      ARTIFACTS: ${{ github.workspace }}/artifacts
     steps:
       - name: Checkout repository
         uses: actions/checkout@main
         with:
           fetch-depth: 0
 
-      # build-windows-clang.sh's package set.
-      - name: Setup msys2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: clang64
-          update: true
-          cache: true
-          install: |
-            mingw-w64-clang-x86_64-clang
-            mingw-w64-clang-x86_64-ccache
-            mingw-w64-clang-x86_64-cmake
-            mingw-w64-clang-x86_64-lld
-            mingw-w64-clang-x86_64-ninja
-            mingw-w64-clang-x86_64-llvm
-            mingw-w64-clang-x86_64-ffmpeg
-            mingw-w64-clang-x86_64-opencv
-            mingw-w64-clang-x86_64-iconv
-            mingw-w64-clang-x86_64-glew
-            mingw-w64-clang-x86_64-vulkan
-            mingw-w64-clang-x86_64-vulkan-headers
-            mingw-w64-clang-x86_64-vulkan-loader
-            mingw-w64-clang-x86_64-gtest
-            mingw-w64-clang-x86_64-qt6-base
-            mingw-w64-clang-x86_64-qt6-declarative
-            mingw-w64-clang-x86_64-qt6-multimedia
-            mingw-w64-clang-x86_64-qt6-svg
-            mingw-w64-clang-x86_64-qt6-tools
-            mingw-w64-clang-x86_64-qt6-translations
-            base-devel
-            curl
-            git
-            p7zip
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v4
+
+      - name: Restore NuGet packages
+        run: nuget restore rpcs3.sln
+
+      - name: Setup env
+        shell: pwsh
+        run: |
+          echo "QTDIR=C:\Qt\${{ env.QT_VER }}\${{ env.QT_VER_MSVC }}_64" >> ${{ github.env }}
+          echo "VULKAN_SDK=C:\VulkanSDK\${{ env.VULKAN_VER }}" >> ${{ github.env }}
+
+      - name: Get Cache Keys
+        run: .ci/get_keys-windows.sh
 
       - name: Restore Build Ccache
         uses: actions/cache/restore@main
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ignition-embed-windows-ccache-${{ github.run_id }}
-          restore-keys: ignition-embed-windows-ccache-
+          key: ignition-embed-windows-msvc-ccache-${{ github.run_id }}
+          restore-keys: |
+            ignition-embed-windows-msvc-ccache-
+            ignition-standalone-windows-ccache-
 
-      - name: Build and bundle module
-        shell: msys2 {0}
-        run: |
-          export CCACHE_DIR=$(cygpath -u "$CCACHE_DIR")
-          .ci/build-ignition-windows.sh "$(pwd)/artifacts/bundle"
+      - name: Restore Dependencies Cache
+        uses: actions/cache/restore@main
+        id: restore-dependencies-cache
+        with:
+          path: ${{ env.DEPS_CACHE_DIR }}
+          key: "ignition-windows-deps-${{ env.QT_VER }}-${{ env.VULKAN_SDK_SHA }}-${{ env.CCACHE_SHA }}-${{ hashFiles('llvm.lock') }}"
+          restore-keys: ignition-standalone-windows-deps-
+
+      # upstream's setup-windows-ci-vars.sh is not run: it names the app's
+      # archive and records a repository origin this build leaves unset.
+      - name: Download and unpack dependencies
+        run: .ci/setup-windows.sh
+
+      - name: Save Dependencies Cache
+        if: steps.restore-dependencies-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@main
+        with:
+          path: ${{ env.DEPS_CACHE_DIR }}
+          key: ${{ steps.restore-dependencies-cache.outputs.cache-primary-key }}
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@main
+
+      - name: Compile module
+        shell: pwsh
+        run: msbuild rpcs3.sln /t:rpcs3_ignition /p:Configuration=Release /v:minimal /p:Platform=x64 /p:PreferredToolArchitecture=x64 /p:CLToolPath=${{ env.CCACHE_BIN_DIR }} /p:UseMultiToolTask=true /p:CustomAfterMicrosoftCommonTargets="${{ github.workspace }}\buildfiles\msvc\ci_only.targets"
 
       - name: Save Build Ccache
         if: always()
         uses: actions/cache/save@main
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ignition-embed-windows-ccache-${{ github.run_id }}
+          key: ignition-embed-windows-msvc-ccache-${{ github.run_id }}
+
+      - name: Bundle module
+        run: |
+          python -m pip install --quiet pefile
+          python .ci/package-ignition-windows.py bin/ignition/rpcs3_ignition.dll "$ARTIFACTS/bundle" \
+            --source-root . --search "$QTDIR/bin" --search 3rdparty/opencv/opencv/opencv414/build/x64/bin
 
       # LoadLibraryEx with the DLL's own directory searched (and the system's,
-      # not PATH, so nothing resolves from MSYS2): what the host must do.
+      # not PATH): how rpcs3-host loads it.
       - name: Load as the host does
         shell: pwsh
         run: |
           $dll = "${{ github.workspace }}\artifacts\bundle\rpcs3_ignition.dll"
           python -c "import ctypes, sys; m = ctypes.WinDLL(sys.argv[1], winmode=0x1100); print('ABI', m.ignition_ps3_abi_version())" $dll
+          Get-Content "${{ github.workspace }}\artifacts\bundle\release.json"
 
       - name: Upload module
         uses: actions/upload-artifact@main
