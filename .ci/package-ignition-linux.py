@@ -15,9 +15,12 @@ requirement rather than a load failure.
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import time
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -105,18 +108,58 @@ def split(module, libraries):
 
 
 def package_of(path):
-    try:
-        return run("dpkg", "-S", str(path)).split(":", 1)[0].strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+    # dpkg records merged-/usr files under either /usr/lib or /lib.
+    candidates = [path]
+    if str(path).startswith("/usr/lib/"):
+        candidates.append(Path(str(path)[len("/usr"):]))
+    for candidate in candidates:
+        try:
+            return run("dpkg", "-S", str(candidate)).split(":", 1)[0].strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    return None
+
+
+# Components the image builds outside the package manager, and so has no
+# copyright file for: their licence texts, fetched from their own sources.
+UPSTREAM_LICENCES = [
+    (r"libQt6.*", "qt", ["https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/LGPL-3.0-only.txt",
+                         "https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-2.0-only.txt",
+                         "https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/GPL-3.0-only.txt"]),
+    (r"lib(av|sw).*", "ffmpeg", ["https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/LICENSE.md",
+                                 "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.LGPLv2.1",
+                                 "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.GPLv2",
+                                 "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/COPYING.GPLv3"]),
+    (r"libSDL3.*", "sdl3", ["https://raw.githubusercontent.com/libsdl-org/SDL/main/LICENSE.txt"]),
+    (r"libopencv_.*", "opencv", ["https://raw.githubusercontent.com/opencv/opencv/4.x/LICENSE"]),
+]
+# Linked statically into the module itself.
+STATIC_LICENCES = [
+    ("llvm", ["https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/LICENSE.TXT"]),
+]
+
+
+def fetch(url):
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return response.read()
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(10)
+
+
+def version_key(version):
+    return tuple(int(x) for x in version.split("."))
 
 
 def symbol_versions(path, prefix):
-    found = set(re.findall(prefix + r"_([0-9.]+)", run("objdump", "-T", str(path))))
-    return max(found, key=lambda v: tuple(int(x) for x in v.split(".")), default=None)
+    found = set(re.findall(prefix + r"_([0-9.]+)\b", run("objdump", "-T", str(path))))
+    return max(found, key=version_key, default=None)
 
 
-def copy_licences(output, source_root, packages, sources):
+def copy_licences(output, source_root, packages, sources, names):
     licences = output / "licenses"
     rpcs3 = licences / "rpcs3"
     rpcs3.mkdir(parents=True)
@@ -133,16 +176,33 @@ def copy_licences(output, source_root, packages, sources):
             target = licences / "packages" / package / "copyright"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(copyright_file, target)
-    # Libraries from outside the package manager (Qt, in this image) carry
-    # their licences in their own prefix.
-    for source in sources:
-        prefix = source.parent.parent
-        for name in ("LICENSES", "licenses"):
-            folder = prefix / name
-            if folder.is_dir():
-                target = licences / "prefix" / prefix.name
-                if not target.exists():
-                    shutil.copytree(folder, target)
+    # The C++ runtime the module links statically: its package's copyright,
+    # which carries the GCC Runtime Library Exception.
+    for archive in ("libstdc++.a", "libgcc.a", "libgcc_eh.a"):
+        path = Path(run(os.environ.get("CXX", "c++"), f"-print-file-name={archive}").strip())
+        package = package_of(path.resolve()) if path.is_file() else None
+        if package is None:
+            raise RuntimeError(f"No package owns {archive} ({path})")
+        packages = set(packages) | {package}
+    for package in sorted(packages):
+        copyright_file = Path("/usr/share/doc") / package / "copyright"
+        if copyright_file.is_file():
+            target = licences / "packages" / package / "copyright"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(copyright_file, target)
+        else:
+            raise RuntimeError(f"No copyright file for {package}")
+    needed_upstream = [(folder, urls) for pattern, folder, urls in UPSTREAM_LICENCES
+                       if any(re.fullmatch(pattern, name) for name in names)]
+    unlicensed = [name for name, source in zip(names, sources) if package_of(source) is None
+                  and not any(re.fullmatch(pattern, name) for pattern, _, _ in UPSTREAM_LICENCES)]
+    if unlicensed:
+        raise RuntimeError(f"No licence source for {unlicensed}")
+    for folder, urls in [*needed_upstream, *STATIC_LICENCES]:
+        target = licences / "upstream" / folder
+        target.mkdir(parents=True, exist_ok=True)
+        for url in urls:
+            (target / url.rsplit("/", 1)[1]).write_bytes(fetch(url))
 
 
 def main():
@@ -150,6 +210,8 @@ def main():
     parser.add_argument("module", type=Path)
     parser.add_argument("output", type=Path, help="New bundle directory")
     parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--max-glibc", help="Oldest host glibc to load on, e.g. 2.35")
+    parser.add_argument("--max-glibcxx", help="Oldest host libstdc++ to load on, e.g. 3.4.30")
     args = parser.parse_args()
 
     module = args.module.resolve()
@@ -189,11 +251,19 @@ def main():
     header = (args.source_root / "rpcs3/ignition/ignition_ps3.h").read_text()
     abi = int(re.search(r"#define IGNITION_PS3_ABI_VERSION (\d+)", header).group(1))
     binaries = [target, *(output / "lib").iterdir()]
+    # Every binary must load against the oldest host the bundle claims.
+    for prefix, limit in (("GLIBC", args.max_glibc), ("GLIBCXX", args.max_glibcxx)):
+        if not limit:
+            continue
+        over = {b.name: v for b in binaries if (v := symbol_versions(b, prefix))
+                and version_key(v) > version_key(limit)}
+        if over:
+            raise RuntimeError(f"{prefix} newer than {limit} required by {over}")
     source_commit = run("git", "-C", str(args.source_root), "rev-parse", "HEAD").strip()
 
     copy_licences(output, args.source_root,
                   {entry["package"] for entry in inventory.values() if entry["package"]},
-                  [path.resolve() for path in bundled.values()])
+                  [path.resolve() for path in bundled.values()], list(bundled))
 
     (output / "bundle.json").write_text(json.dumps({
         "bundled": inventory,
@@ -205,6 +275,10 @@ def main():
         "source": f"https://github.com/ignition-emu/rpcs3/tree/{source_commit}",
         "input_module_sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
         "exports": exports,
+        # FFmpeg's own statement of the licence its configuration puts it under.
+        "ffmpeg_license": sorted(set(re.findall(r"(?:L?GPL version [^\x00\n]*)",
+                                                run("strings", str(output / "lib" / next(
+                                                    n for n in bundled if n.startswith("libavutil"))))))),
         "requires": {
             "GLIBC": max(filter(None, (symbol_versions(b, "GLIBC") for b in binaries)),
                          key=lambda v: tuple(int(x) for x in v.split("."))),

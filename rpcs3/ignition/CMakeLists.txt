@@ -102,7 +102,14 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		"-Wl,--no-undefined"
 		# The __start_/__stop_ symbols the linker makes for named sections
 		# (protobuf's pb_defaults) are exported by default.
-		"-Wl,-z,start-stop-visibility=hidden")
+		"-Wl,-z,start-stop-visibility=hidden"
+		# The C++ runtime linked in and kept local (the version script hides it
+		# with everything else), so the module asks nothing of the host's
+		# libstdc++: the build image's is newer than Ubuntu 22.04's, and a host
+		# process has usually loaded its own already (Mesa, Godot). Only C
+		# crosses the ABI.
+		"-static-libstdc++"
+		"-static-libgcc")
 	set_target_properties(rpcs3_ignition PROPERTIES LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ignition_ps3.map")
 endif()
 
