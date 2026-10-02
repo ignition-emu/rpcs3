@@ -38,8 +38,10 @@ SYSTEM = [
     r"libXext\.so.*", r"libXrender\.so.*", r"libXi\.so.*", r"libXrandr\.so.*",
     r"libXfixes\.so.*", r"libXcursor\.so.*", r"libXinerama\.so.*", r"libxkbcommon.*",
     r"libwayland-.*",
-    # GPU compute and video-decode loaders, which find the host's drivers.
-    r"libOpenCL\.so.*", r"libva\.so.*", r"libva-.*", r"libvdpau\.so.*",
+    # Video-decode loaders, which find the host's drivers. (The OpenCL ICD
+    # loader is bundled instead: it finds the host's drivers from
+    # /etc/OpenCL/vendors either way, and not every desktop installs it.)
+    r"libva\.so.*", r"libva-.*", r"libvdpau\.so.*",
     # Audio and system services.
     r"libasound\.so.*", r"libpulse.*", r"libjack\.so.*", r"libpipewire.*",
     r"libdbus-1\.so.*", r"libudev\.so.*", r"libsystemd\.so.*",
