@@ -6,14 +6,18 @@
 # Windows x64 is built with MSVC from rpcs3.sln, as upstream's releases are
 # (static CRT), bundled by .ci/package-ignition-windows.py, then loaded the way
 # the host loads it.
+#
+# On an ignition-v* tag the Linux and Windows bundles built from that tag are
+# published to its release (the publish job). macOS is left to
+# ignition-release.yml there, whose bundle is published by hand.
 name: Ignition embed
 
 on:
   workflow_dispatch:
   push:
-    # Branches only: an ignition-v* tag push is the release workflow's job, and
-    # without this it matched here too and double-built the module.
+    # Path filters apply to branch pushes only; every ignition-v* tag builds.
     branches: ['**']
+    tags: ['ignition-v*']
     paths:
       - 'rpcs3/ignition/**'
       - 'rpcs3/Emu/RSX/VK/vkutils/instance.*'
@@ -27,6 +31,9 @@ on:
 jobs:
   macos-arm64:
     name: Ignition module (macOS arm64)
+    # On a tag, ignition-release.yml builds macOS; building it here too was
+    # the double build this workflow once had.
+    if: github.ref_type != 'tag'
     runs-on: macos-15
     env:
       CCACHE_DIR: /tmp/ccache_dir
@@ -256,3 +263,51 @@ jobs:
             artifacts/SHA256SUMS-windows
           if-no-files-found: error
           compression-level: 0
+
+  # On an ignition-v* tag: attach the two bundles built above from the tag to
+  # its release, creating the release if the tag has none. Only these names
+  # are uploaded and nothing is clobbered, so a macOS bundle published by hand
+  # (librpcs3_ignition.dylib.zip) is never touched, and a re-run fails rather
+  # than replace an asset already there.
+  publish:
+    name: Publish to the tag's release
+    if: github.ref_type == 'tag'
+    needs: [linux-x86_64, windows-x64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@main
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        run: |
+          cd dist
+          ls -l
+          linux=librpcs3_ignition-linux-x86_64.zip
+          windows=rpcs3_ignition-windows-x64.zip
+          sha256sum -c SHA256SUMS
+          sha256sum -c SHA256SUMS-windows
+          cat SHA256SUMS SHA256SUMS-windows > SHA256SUMS-embed
+          linux_sha=$(sha256sum "$linux" | cut -d' ' -f1)
+          windows_sha=$(sha256sum "$windows" | cut -d' ' -f1)
+          run="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          cat > notes.md <<NOTES
+          The Ignition PS3 embed module (ABI from \`rpcs3/ignition/ignition_ps3.h\`) for Linux x86_64 and Windows x64, built by CI from $TAG (${{ github.sha }}) in run $run.
+
+          - \`$linux\` sha256 \`$linux_sha\`: loads on Ubuntu 22.04 and newer (glibc 2.35, GCC 12's libstdc++); see bundle.json for the libraries left to the host.
+          - \`$windows\` sha256 \`$windows_sha\`: MSVC, static CRT; the Vulkan loader is the system's.
+
+          Each archive carries release.json (source commit, input module checksum), bundle.json and the licences of everything bundled. The macOS module is not part of this release.
+          NOTES
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md
+          fi
+          gh release upload "$TAG" "$linux" "$windows" SHA256SUMS-embed
