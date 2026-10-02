@@ -3,6 +3,8 @@
 # it); Linux x86_64 is bundled here, in the image it was built in, by
 # .ci/package-ignition-linux.py, and the bundle is then loaded in a clean
 # container that has only the system libraries the bundle leaves to the host.
+# Windows x64 is built under MSYS2 clang64 and its DLLs gathered beside it by
+# .ci/build-ignition-windows.sh, then loaded the way the host loads it.
 name: Ignition embed
 
 on:
@@ -17,6 +19,7 @@ on:
       - '.ci/build-mac.sh'
       - '.ci/build-ignition-linux.sh'
       - '.ci/package-ignition-linux.py'
+      - '.ci/build-ignition-windows.sh'
       - '.github/workflows/ignition-embed.yml'
 
 jobs:
@@ -123,5 +126,89 @@ jobs:
           path: |
             ${{ env.ARTIFACTS }}/librpcs3_ignition-linux-x86_64.zip
             ${{ env.ARTIFACTS }}/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+
+  windows-x64:
+    name: Ignition module (Windows x64)
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    env:
+      CCACHE_DIR: 'C:\ccache'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      # build-windows-clang.sh's package set.
+      - name: Setup msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: clang64
+          update: true
+          cache: true
+          install: |
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-ccache
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-lld
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-opencv
+            mingw-w64-clang-x86_64-iconv
+            mingw-w64-clang-x86_64-glew
+            mingw-w64-clang-x86_64-vulkan
+            mingw-w64-clang-x86_64-vulkan-headers
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-gtest
+            mingw-w64-clang-x86_64-qt6-base
+            mingw-w64-clang-x86_64-qt6-declarative
+            mingw-w64-clang-x86_64-qt6-multimedia
+            mingw-w64-clang-x86_64-qt6-svg
+            mingw-w64-clang-x86_64-qt6-tools
+            mingw-w64-clang-x86_64-qt6-translations
+            base-devel
+            curl
+            git
+            p7zip
+
+      - name: Restore Build Ccache
+        uses: actions/cache/restore@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ignition-embed-windows-ccache-${{ github.run_id }}
+          restore-keys: ignition-embed-windows-ccache-
+
+      - name: Build and bundle module
+        shell: msys2 {0}
+        run: |
+          export CCACHE_DIR=$(cygpath -u "$CCACHE_DIR")
+          .ci/build-ignition-windows.sh "$(pwd)/artifacts/bundle"
+
+      - name: Save Build Ccache
+        if: always()
+        uses: actions/cache/save@main
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ignition-embed-windows-ccache-${{ github.run_id }}
+
+      # LoadLibraryEx with the DLL's own directory searched (and the system's,
+      # not PATH, so nothing resolves from MSYS2): what the host must do.
+      - name: Load as the host does
+        shell: pwsh
+        run: |
+          $dll = "${{ github.workspace }}\artifacts\bundle\rpcs3_ignition.dll"
+          python -c "import ctypes, sys; m = ctypes.WinDLL(sys.argv[1], winmode=0x1100); print('ABI', m.ignition_ps3_abi_version())" $dll
+
+      - name: Upload module
+        uses: actions/upload-artifact@main
+        with:
+          name: rpcs3_ignition-windows-x64
+          path: |
+            artifacts/rpcs3_ignition-windows-x64.zip
+            artifacts/SHA256SUMS-windows
           if-no-files-found: error
           compression-level: 0

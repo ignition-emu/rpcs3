@@ -38,6 +38,8 @@ SYSTEM = [
     r"libXext\.so.*", r"libXrender\.so.*", r"libXi\.so.*", r"libXrandr\.so.*",
     r"libXfixes\.so.*", r"libXcursor\.so.*", r"libXinerama\.so.*", r"libxkbcommon.*",
     r"libwayland-.*",
+    # GPU compute and video-decode loaders, which find the host's drivers.
+    r"libOpenCL\.so.*", r"libva\.so.*", r"libva-.*", r"libvdpau\.so.*",
     # Audio and system services.
     r"libasound\.so.*", r"libpulse.*", r"libjack\.so.*", r"libpipewire.*",
     r"libdbus-1\.so.*", r"libudev\.so.*", r"libsystemd\.so.*",
@@ -74,6 +76,30 @@ def closure(module):
             name = line.split(" (", 1)[0].strip()
             libraries[Path(name).name] = None
     return libraries
+
+
+def needed(path):
+    """The sonames an ELF file names itself (DT_NEEDED), not its closure."""
+    return re.findall(r"\(NEEDED\)\s+Shared library: \[(.+?)\]", run("readelf", "-d", str(path)))
+
+
+def split(module, libraries):
+    """Walk DT_NEEDED from the module. A system library is left to the host
+    and not descended into: what it needs is the host's business too, and
+    resolves from the host's own paths whatever the bundle carries."""
+    bundled, system = {}, {}
+    queue = [module]
+    while queue:
+        for name in needed(queue.pop()):
+            if name in bundled or name in system:
+                continue
+            path = libraries.get(name)
+            if path is None or is_system(name):
+                system[name] = path
+            else:
+                bundled[name] = path
+                queue.append(path.resolve())
+    return bundled, system
 
 
 def package_of(path):
@@ -129,10 +155,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     (output / "lib").mkdir()
 
-    libraries = closure(module)
-    bundled, system = {}, {}
-    for name, path in sorted(libraries.items()):
-        (system if path is None or is_system(name) else bundled)[name] = path
+    bundled, system = split(module, closure(module))
 
     inventory = {}
     target = output / MODULE
@@ -147,9 +170,13 @@ def main():
         run("strip", "--strip-debug", str(file))
         run("patchelf", "--set-rpath", "$ORIGIN/lib" if file == target else "$ORIGIN", str(file))
 
-    # The bundle must resolve from itself: nothing outside SYSTEM may remain.
-    escaped = {name: str(path) for name, path in closure(target).items()
-               if path is not None and not is_system(name) and output.resolve() not in path.resolve().parents}
+    # The bundle must resolve from itself: every non-system library the module
+    # or a bundled library names must load from the bundle.
+    resolved = closure(target)
+    escaped = {name: str(resolved.get(name))
+               for file in [target, *(output / "lib").iterdir()] for name in needed(file)
+               if not is_system(name) and (resolved.get(name) is None
+                                           or output.resolve() not in resolved[name].resolve().parents)}
     if escaped:
         raise RuntimeError(f"Resolved outside the bundle: {escaped}")
 
@@ -193,9 +220,9 @@ def main():
     (output.parent / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n")
 
     print(f"{len(exports)} exports; {len(bundled)} libraries bundled, {len(system)} left to the host")
-    for name in bundled:
+    for name in sorted(bundled):
         print(f"  bundled {name}")
-    for name in system:
+    for name in sorted(system):
         print(f"  system  {name}")
     print(f"{archive.name} {archive.stat().st_size} bytes sha256 {digest}")
 
