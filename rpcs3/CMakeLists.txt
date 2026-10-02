@@ -38,6 +38,12 @@ if (NOT ANDROID)
     add_subdirectory(rpcs3qt)
 endif()
 
+# The Ignition embed module, from here so it is compiled with the options
+# above (ConfigureCompiler, the display defines), exactly as rpcs3_emu is.
+if(WITH_IGNITION)
+    add_subdirectory(ignition)
+endif()
+
 gen_git_version(${CMAKE_CURRENT_SOURCE_DIR})
 
 if (NOT ANDROID)

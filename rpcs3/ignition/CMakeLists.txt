@@ -1,8 +1,7 @@
 # The Ignition PS3 embed module: a Qt-free shared library over rpcs3_emu,
 
-# Qt is set up inside rpcs3/CMakeLists.txt, not at top level where this subdir
-# is added, so find it here for AUTOMOC and the Qt6::* targets. Qt6_DIR is in
-# the build environment already.
+# Added from rpcs3/CMakeLists.txt, so it inherits that directory's compile
+# options; Qt6::Core and Gui are found here for AUTOMOC and the link.
 find_package(Qt6 COMPONENTS Core Gui REQUIRED)
 # exporting the C ABI in ignition_ps3.h. Built only when WITH_IGNITION is ON,
 # and never linked into the RPCS3 executable -- it is loaded at runtime by the
@@ -83,18 +82,13 @@ if(APPLE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_link_libraries(rpcs3_ignition PRIVATE rt)
 
-	# rpcs3/CMakeLists.txt defines these for its own directory only, and
-	# display.h's handle type must be the one rpcs3_emu was built with. X11 is
-	# also what rpcs3_emu's X11 swapchain links, and the hidden-window fallback.
-	find_package(X11)
+	# HAVE_X11/HAVE_WAYLAND come from rpcs3/CMakeLists.txt. X11 is what
+	# rpcs3_emu's X11 swapchain links, and the hidden-window fallback.
 	if(X11_FOUND)
-		target_compile_definitions(rpcs3_ignition PRIVATE HAVE_X11)
 		target_sources(rpcs3_ignition PRIVATE ignition_x11.cpp)
 		target_link_libraries(rpcs3_ignition PRIVATE X11::X11)
 	endif()
-	find_package(Wayland)
 	if(WAYLAND_FOUND)
-		target_compile_definitions(rpcs3_ignition PRIVATE HAVE_WAYLAND)
 		target_include_directories(rpcs3_ignition SYSTEM PRIVATE ${WAYLAND_INCLUDE_DIR})
 	endif()
 

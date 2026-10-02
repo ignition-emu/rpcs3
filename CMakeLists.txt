@@ -137,8 +137,4 @@ if(BUILD_RPCS3_TESTS)
 endif()
 add_subdirectory(rpcs3)
 
-if(WITH_IGNITION)
-	add_subdirectory(rpcs3/ignition)
-endif()
-
 set_directory_properties(PROPERTIES VS_STARTUP_PROJECT rpcs3)
