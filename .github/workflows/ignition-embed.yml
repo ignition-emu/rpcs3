@@ -149,6 +149,7 @@ jobs:
               ldd /a/bundle/librpcs3_ignition.so | grep -v "=> /a/bundle/" || true
               if ldd /a/bundle/librpcs3_ignition.so | grep "not found"; then exit 1; fi
               python3 -c "import ctypes; m = ctypes.CDLL(\"/a/bundle/librpcs3_ignition.so\"); print(\"ABI\", m.ignition_ps3_abi_version())"
+              python3 -c "import ctypes; m = ctypes.CDLL(\"/a/bundle/librpcs3_ignition.so\"); f = m.ignition_ps3_decrypt_module; r = (f(None, None), f(b\"/nonexistent\", b\"/tmp/out.elf\"), f(b\"/etc/os-release\", b\"/tmp/out.elf\")); print(\"decrypt codes\", r); assert r == (-1, -2, -3), r"
             '
           done
           cat "$ARTIFACTS/bundle/release.json" "$ARTIFACTS/SHA256SUMS"
@@ -317,6 +318,7 @@ jobs:
         run: |
           $dll = "${{ github.workspace }}\artifacts\bundle\rpcs3_ignition.dll"
           python -c "import ctypes, sys; m = ctypes.WinDLL(sys.argv[1], winmode=0x1100); print('ABI', m.ignition_ps3_abi_version())" $dll
+          python -c "import ctypes, sys; m = ctypes.WinDLL(sys.argv[1], winmode=0x1100); f = m.ignition_ps3_decrypt_module; r = (f(None, None), f(b'C:/nonexistent', b'out.elf'), f(sys.argv[1].encode(), b'out.elf')); print('decrypt codes', r); assert r == (-1, -2, -3), r" $dll
           Get-Content "${{ github.workspace }}\artifacts\bundle\release.json"
 
       - name: Upload module

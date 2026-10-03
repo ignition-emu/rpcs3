@@ -21,8 +21,10 @@ extern "C" {
 #define IGNITION_PS3_API __attribute__((visibility("default")))
 #endif
 
-// Bumped whenever this header changes shape. The host refuses a module whose
-// version it does not know, the same guard libretro's API version gives.
+// Bumped whenever an existing entry point, struct or code changes meaning. The
+// host refuses a module whose version it does not know, the same guard
+// libretro's API version gives. An added entry point that hosts resolve
+// optionally does not bump it (ignition_ps3_decrypt_module is one).
 #define IGNITION_PS3_ABI_VERSION 4
 IGNITION_PS3_API uint32_t ignition_ps3_abi_version(void);
 
@@ -39,8 +41,36 @@ typedef enum {
     IGNITION_PS3_STOPPING = 4,
 } ignition_ps3_state;
 
-// Zero is success; non-zero mirrors game_boot_result so the host can report why.
+// What ignition_ps3_boot returns: zero is success, anything else says why it
+// failed. The values are frozen for ABI 4. They are RPCS3's game_boot_result
+// as every published ABI 4 module (ignition-v0.1.2, v0.1.3) passed it through,
+// and codes RPCS3 has added since are appended rather than inserted, so an
+// upstream reorder never changes what a host reads. The module translates
+// RPCS3's own enum to these; one it does not know reads as GENERIC_ERROR.
 typedef int32_t ignition_ps3_boot_result;
+enum {
+    IGNITION_PS3_BOOT_OK                            = 0,
+    IGNITION_PS3_BOOT_GENERIC_ERROR                 = 1,
+    IGNITION_PS3_BOOT_NOTHING_TO_BOOT               = 2,
+    IGNITION_PS3_BOOT_WRONG_DISC_LOCATION           = 3,
+    IGNITION_PS3_BOOT_INVALID_FILE_OR_FOLDER        = 4,
+    IGNITION_PS3_BOOT_INVALID_BDVD_FOLDER           = 5,
+    IGNITION_PS3_BOOT_INSTALL_FAILED                = 6,
+    IGNITION_PS3_BOOT_DECRYPTION_ERROR              = 7,
+    IGNITION_PS3_BOOT_FILE_CREATION_ERROR           = 8,
+    IGNITION_PS3_BOOT_FIRMWARE_MISSING              = 9,
+    IGNITION_PS3_BOOT_FIRMWARE_VERSION              = 10,
+    IGNITION_PS3_BOOT_UNSUPPORTED_DISC_TYPE         = 11,
+    IGNITION_PS3_BOOT_SAVESTATE_CORRUPTED           = 12,
+    IGNITION_PS3_BOOT_SAVESTATE_VERSION_UNSUPPORTED = 13,
+    IGNITION_PS3_BOOT_STILL_RUNNING                 = 14,
+    IGNITION_PS3_BOOT_ALREADY_ADDED                 = 15,
+    IGNITION_PS3_BOOT_CURRENTLY_RESTRICTED          = 16,
+    IGNITION_PS3_BOOT_DATABASE_CONFIG_MISSING       = 17,
+    // Added after ABI 4 was published (ignition-v0.1.4 onwards).
+    IGNITION_PS3_BOOT_DISC_KEY_MISSING              = 18, // a disc's .dkey/.ird key is absent
+    IGNITION_PS3_BOOT_DISC_KEY_INVALID              = 19, // the key does not decrypt the disc
+};
 
 // Where RPCS3 keeps the state it insists on owning. Set once before boot.
 typedef struct {
@@ -136,6 +166,26 @@ IGNITION_PS3_API int32_t ignition_ps3_firmware_present(ignition_ps3*);
 // Installs a PS3 firmware PUP into dev_flash under the configured dirs. Zero on
 // success; negative on a bad or unreadable PUP. Run once before boot.
 IGNITION_PS3_API int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path);
+
+// Decrypts one signed PS3 executable (a SELF: a firmware .sprx or .self) to the
+// plain ELF at `elf_out`, with RPCS3's own decrypter -- the decrypt_self call
+// behind `rpcs3 --decrypt`, with no KLIC, so it serves system software and not
+// NPDRM content. Needs no instance and touches no emulator state, so it may be
+// called from any thread, before create or while a title runs. `elf_out` is
+// replaced; on any failure nothing is left at that path.
+//
+// Optional within ABI 4: modules from ignition-v0.1.4 export it, earlier ones
+// do not, so a host resolves it by name and treats its absence as "module too
+// old" rather than refusing the module.
+enum {
+    IGNITION_PS3_DECRYPT_OK            = 0,
+    IGNITION_PS3_DECRYPT_BAD_ARGUMENT  = -1, // a null or empty path, or in == out
+    IGNITION_PS3_DECRYPT_UNREADABLE    = -2, // the input could not be opened or read
+    IGNITION_PS3_DECRYPT_NOT_SELF      = -3, // the input has no SELF header
+    IGNITION_PS3_DECRYPT_FAILED        = -4, // headers, metadata or data would not decrypt
+    IGNITION_PS3_DECRYPT_WRITE_FAILED  = -5, // the output could not be written
+};
+IGNITION_PS3_API int32_t ignition_ps3_decrypt_module(const char* self_in, const char* elf_out);
 
 // Runtime settings, mirroring RPCS3's two-layer settings-dialog model. `scope`
 // selects the layer: 0 = global (config.yml, "all PS3 games"), 1 = game (the

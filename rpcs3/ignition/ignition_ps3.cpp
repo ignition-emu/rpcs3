@@ -1078,13 +1078,44 @@ void ignition_ps3_destroy(ignition_ps3* self)
 	delete self;
 }
 
+// RPCS3's game_boot_result in the ABI's frozen numbering (ignition_ps3.h). No
+// default case, so a code upstream adds is a -Wswitch warning here rather than
+// a silent shift of every code after it.
+static ignition_ps3_boot_result abi_boot_result(game_boot_result result)
+{
+	switch (result)
+	{
+	case game_boot_result::no_errors:                     return IGNITION_PS3_BOOT_OK;
+	case game_boot_result::generic_error:                 return IGNITION_PS3_BOOT_GENERIC_ERROR;
+	case game_boot_result::nothing_to_boot:               return IGNITION_PS3_BOOT_NOTHING_TO_BOOT;
+	case game_boot_result::wrong_disc_location:           return IGNITION_PS3_BOOT_WRONG_DISC_LOCATION;
+	case game_boot_result::invalid_file_or_folder:        return IGNITION_PS3_BOOT_INVALID_FILE_OR_FOLDER;
+	case game_boot_result::invalid_bdvd_folder:           return IGNITION_PS3_BOOT_INVALID_BDVD_FOLDER;
+	case game_boot_result::install_failed:                return IGNITION_PS3_BOOT_INSTALL_FAILED;
+	case game_boot_result::decryption_error:              return IGNITION_PS3_BOOT_DECRYPTION_ERROR;
+	case game_boot_result::file_creation_error:           return IGNITION_PS3_BOOT_FILE_CREATION_ERROR;
+	case game_boot_result::firmware_missing:              return IGNITION_PS3_BOOT_FIRMWARE_MISSING;
+	case game_boot_result::firmware_version:              return IGNITION_PS3_BOOT_FIRMWARE_VERSION;
+	case game_boot_result::unsupported_disc_type:         return IGNITION_PS3_BOOT_UNSUPPORTED_DISC_TYPE;
+	case game_boot_result::disc_key_missing:              return IGNITION_PS3_BOOT_DISC_KEY_MISSING;
+	case game_boot_result::disc_key_invalid:              return IGNITION_PS3_BOOT_DISC_KEY_INVALID;
+	case game_boot_result::savestate_corrupted:           return IGNITION_PS3_BOOT_SAVESTATE_CORRUPTED;
+	case game_boot_result::savestate_version_unsupported: return IGNITION_PS3_BOOT_SAVESTATE_VERSION_UNSUPPORTED;
+	case game_boot_result::still_running:                 return IGNITION_PS3_BOOT_STILL_RUNNING;
+	case game_boot_result::already_added:                 return IGNITION_PS3_BOOT_ALREADY_ADDED;
+	case game_boot_result::currently_restricted:          return IGNITION_PS3_BOOT_CURRENTLY_RESTRICTED;
+	case game_boot_result::database_config_missing:       return IGNITION_PS3_BOOT_DATABASE_CONFIG_MISSING;
+	}
+	return IGNITION_PS3_BOOT_GENERIC_ERROR;
+}
+
 ignition_ps3_boot_result ignition_ps3_boot(ignition_ps3* self, const char* game_path)
 {
 	if (!self || !game_path)
 	{
-		return static_cast<ignition_ps3_boot_result>(game_boot_result::generic_error);
+		return IGNITION_PS3_BOOT_GENERIC_ERROR;
 	}
-	return static_cast<ignition_ps3_boot_result>(Emu.BootGame(game_path));
+	return abi_boot_result(Emu.BootGame(game_path));
 }
 
 int32_t ignition_ps3_progress_of(const ignition_ps3*, ignition_ps3_progress* out)
@@ -1336,6 +1367,61 @@ int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path)
 		}
 	}
 	return 0;
+}
+
+int32_t ignition_ps3_decrypt_module(const char* self_in, const char* elf_out)
+{
+	if (!self_in || !elf_out || !*self_in || !*elf_out || std::string_view(self_in) == elf_out)
+	{
+		return IGNITION_PS3_DECRYPT_BAD_ARGUMENT;
+	}
+
+	const fs::file input(self_in);
+	u32 magic = 0;
+	if (!input || !input.read(magic))
+	{
+		return IGNITION_PS3_DECRYPT_UNREADABLE;
+	}
+	if (magic != "SCE\0"_u32)
+	{
+		return IGNITION_PS3_DECRYPT_NOT_SELF;
+	}
+
+	// decrypt_self is what `rpcs3 --decrypt` (decrypt_binaries_t) runs on a
+	// SELF; a null KLIC is its first attempt, the one system software needs.
+	const fs::file elf = decrypt_self(input);
+	u32 elf_magic = 0;
+	if (!elf || elf.size() < 4 || !elf.read_at(0, &elf_magic, sizeof(elf_magic)) || elf_magic != "\177ELF"_u32)
+	{
+		return IGNITION_PS3_DECRYPT_FAILED;
+	}
+
+	bool written = false;
+	{
+		fs::file out(elf_out, fs::rewrite);
+		if (out)
+		{
+			std::vector<u8> buffer(std::min<u64>(elf.size(), 1u << 24));
+			u64 at = 0;
+			written = true;
+			while (const u64 got = elf.read_at(at, buffer.data(), buffer.size()))
+			{
+				if (out.write(buffer.data(), got) != got)
+				{
+					written = false;
+					break;
+				}
+				at += got;
+			}
+			written = written && at == elf.size();
+		}
+	}
+	if (!written)
+	{
+		fs::remove_file(elf_out);
+		return IGNITION_PS3_DECRYPT_WRITE_FAILED;
+	}
+	return IGNITION_PS3_DECRYPT_OK;
 }
 
 // ── Runtime settings ─────────────────────────────────────────────────────────
