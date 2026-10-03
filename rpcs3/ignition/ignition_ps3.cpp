@@ -6,6 +6,7 @@
 #include "ignition_ps3.h"
 
 #include "Emu/System.h"
+#include "Emu/emu_callbacks.h"
 #include "Emu/system_progress.hpp"
 #include "util/logs.hpp"
 #include "util/sysinfo.hpp"
@@ -417,8 +418,9 @@ private:
 class null_video_source final : public video_source
 {
 public:
-	void set_video_path(const std::string&) override {}
-	void set_audio_path(const std::string&) override {}
+	void set_iso_path(const std::string&) override {}
+	void set_video_path(const std::string&, bool) override {}
+	void set_audio_path(const std::string&, bool) override {}
 	void set_active(bool active) override { m_active = active; }
 	bool get_active() const override { return m_active; }
 	bool has_new() const override { return false; }
@@ -458,14 +460,14 @@ public:
 	}
 };
 
-// Fills EmuCallbacks without Qt: the pump is a plain queue. Most of the rest is
+// Fills emu_callbacks without Qt: the pump is a plain queue. Most of the rest is
 // stubbed like headless_application -- but we run Vulkan with native overlays, so
 // where the overlay path needs a real value (fonts, localized text, video source)
 // we provide one instead of headless's null. Every field is assigned; an unset
 // std::function would crash on first call.
-static EmuCallbacks make_callbacks(ignition_ps3* self)
+static emu_callbacks make_callbacks(ignition_ps3* self)
 {
-	EmuCallbacks cb{};
+	emu_callbacks cb{};
 
 	cb.call_from_main_thread = [self](std::function<void()> func, atomic_t<u32>* wake_up)
 	{
@@ -510,7 +512,7 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 			{
 				return std::unique_ptr<GSFrameBase>(g_inst->game_window);
 			}
-			Emu.GetCallbacks().close_gs_frame();
+			g_emu_callbacks.close_gs_frame();
 		}
 		auto frame = std::make_unique<ignition_gs_frame>();
 		if (g_inst)
@@ -640,7 +642,7 @@ static EmuCallbacks make_callbacks(ignition_ps3* self)
 		return result;
 #endif
 	};
-	cb.on_install_pkgs   = [](const std::vector<std::string>&) { return false; };
+	cb.on_install_pkgs   = [](const std::vector<std::string>&, bool) { return false; };
 	cb.enable_gamemode   = [](bool) {};
 
 	return cb;
@@ -994,7 +996,7 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	// forcing it to Null (which skipped the overlay display_manager -> no OSK).
 	Emu.SetSupportedRenderers({video_renderer::null, video_renderer::vulkan});
 
-	Emu.SetCallbacks(make_callbacks(self));
+	g_emu_callbacks = make_callbacks(self);
 	Emu.Init();
 
 	// Write RPCS3's own log, like main_application::InitializeEmulator does --
