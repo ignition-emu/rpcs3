@@ -1914,6 +1914,12 @@ namespace vm
 			{
 				pflags |= block_size_64k;
 			}
+			else if (flags & block_size_4k)
+			{
+				// As alloc() passes it: without it try_alloc() marks the pages 1M, unlike the block's guard pages,
+				// and _page_unmap() then finds the allocation inconsistent when the restored block is unmapped
+				pflags |= block_size_4k;
+			}
 			else if (!(flags & (block_size_mask & ~block_size_1m)))
 			{
 				pflags |= block_size_1m;
