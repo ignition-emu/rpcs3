@@ -1133,12 +1133,12 @@ int32_t ignition_ps3_progress_of(const ignition_ps3*, ignition_ps3_progress* out
 		return 0;
 	}
 
-	out->active = 1;
+	out->active = snapshot.stoppable ? 1 : 2;
 	out->percent = snapshot.percent;
 	// Truncate rather than reject: a long phase name is still worth showing.
 	std::snprintf(out->text, sizeof(out->text), "%s", snapshot.text.c_str());
 	std::snprintf(out->detail, sizeof(out->detail), "%s", snapshot.detail.c_str());
-	return 1;
+	return out->active;
 }
 
 ignition_ps3_state ignition_ps3_state_of(const ignition_ps3*)

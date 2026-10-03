@@ -86,8 +86,16 @@ typedef struct {
 // scaled by how much of the file set has been sized, and the time remaining is
 // smoothed over a history the progress thread keeps. `text` is the phase,
 // `detail` the line beneath it (file/module counts and any time remaining).
+// The phases are RPCS3's: PPU/SPU compilation, and the renderer's shader
+// phases at boot -- the shader interpreter's warm-up ("Compiling shaders",
+// pipelines done of total) and the shader cache's preload -- which RPCS3
+// would otherwise show only as its own dialog inside the frame.
 typedef struct {
-    int32_t  active;  // zero when no phase is in flight; the rest is then stale
+    // Zero when no phase is in flight (the rest is then stale); 1 while one
+    // is; 2 while one is that cannot be interrupted (the interpreter's
+    // warm-up): a stop asked for then waits for it to finish. Hosts written
+    // before 2 existed read any non-zero as in flight, which it is.
+    int32_t  active;
     uint32_t percent; // 0-100, as RPCS3 computes it
     char     text[128];
     char     detail[256];
@@ -124,8 +132,9 @@ IGNITION_PS3_API ignition_ps3_boot_result ignition_ps3_boot(ignition_ps3*, const
 
 IGNITION_PS3_API ignition_ps3_state ignition_ps3_state_of(const ignition_ps3*);
 
-// Fills `out` with the current progress and returns non-zero while a phase is
-// in flight. Safe to call every pump; it copies a snapshot under a lock.
+// Fills `out` with the current progress and returns its `active`: non-zero
+// while a phase is in flight, 2 when that phase cannot be interrupted. Safe to
+// call every pump; it copies a snapshot under a lock.
 IGNITION_PS3_API int32_t ignition_ps3_progress_of(const ignition_ps3*, ignition_ps3_progress* out);
 IGNITION_PS3_API void ignition_ps3_pause(ignition_ps3*);
 IGNITION_PS3_API void ignition_ps3_resume(ignition_ps3*);

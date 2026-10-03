@@ -28,6 +28,15 @@ void publish_system_progress(const system_progress_snapshot& snapshot)
 	g_progress_snapshot = snapshot;
 }
 
+void withdraw_system_progress(u32 source)
+{
+	std::lock_guard lock(g_progress_snapshot_mutex);
+	if (g_progress_snapshot.source == source)
+	{
+		g_progress_snapshot = {};
+	}
+}
+
 system_progress_snapshot get_system_progress()
 {
 	std::lock_guard lock(g_progress_snapshot_mutex);
@@ -424,7 +433,7 @@ void progress_dialog_server::operator()()
 			wait_no_update_count++;
 		}
 
-		publish_system_progress({});
+		withdraw_system_progress(system_progress_source_progress_thread);
 
 		if (ppu_cue_refs)
 		{

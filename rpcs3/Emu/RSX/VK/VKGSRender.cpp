@@ -2,6 +2,7 @@
 #include "stdafx.h"
 #include "../Overlays/overlay_compile_notification.h"
 #include "../Overlays/Shaders/shader_loading_dialog_native.h"
+#include "Emu/system_progress.hpp"
 
 #include "VKAsyncScheduler.h"
 #include "VKCommandStream.h"
@@ -1251,7 +1252,10 @@ void VKGSRender::on_init_thread()
 	if (g_cfg.video.shadermode == shader_mode::async_with_interpreter ||
 		g_cfg.video.shadermode == shader_mode::interpreter_only)
 	{
-		std::unique_ptr<rsx::shader_loading_dialog> dlg = m_overlay_manager
+		// The warm-up drains the pipe compiler's queue and cannot be stopped.
+		std::unique_ptr<rsx::shader_loading_dialog> dlg = g_progress_drawn_by_host
+			? std::make_unique<rsx::shader_loading_dialog_host>(false)
+			: m_overlay_manager
 			? std::make_unique<rsx::shader_loading_dialog_native>(this)
 			: std::make_unique<rsx::shader_loading_dialog>();
 		m_shader_interpreter.preload(dlg.get());
@@ -1260,7 +1264,12 @@ void VKGSRender::on_init_thread()
 
 	if (g_cfg.video.shadermode != shader_mode::interpreter_only)
 	{
-		if (!m_overlay_manager)
+		if (g_progress_drawn_by_host)
+		{
+			rsx::shader_loading_dialog_host dlg(true);
+			m_shaders_cache->load(&dlg);
+		}
+		else if (!m_overlay_manager)
 		{
 			m_frame->hide();
 			m_shaders_cache->load(nullptr);

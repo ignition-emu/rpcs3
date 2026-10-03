@@ -48,6 +48,17 @@ struct system_progress_snapshot
 	std::string detail;  // the progress line, including any time remaining
 	u32 percent = 0;
 	bool active = false;
+	// False while the phase cannot be interrupted: a stop asked for then waits
+	// for it to finish (the shader interpreter's warm-up).
+	bool stoppable = true;
+	// Who published it, so one phase ending does not withdraw another's.
+	u32 source = 0;
+};
+
+enum : u32
+{
+	system_progress_source_progress_thread = 0,
+	system_progress_source_shaders = 1,
 };
 
 // Set by a host that draws progress itself from the published snapshot. RPCS3
@@ -56,6 +67,8 @@ struct system_progress_snapshot
 extern atomic_t<bool> g_progress_drawn_by_host;
 
 void publish_system_progress(const system_progress_snapshot& snapshot);
+// Clears the snapshot if `source` published it last.
+void withdraw_system_progress(u32 source);
 system_progress_snapshot get_system_progress();
 
 enum system_progress_stop_state : u32
