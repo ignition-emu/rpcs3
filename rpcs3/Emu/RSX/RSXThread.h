@@ -6,13 +6,13 @@
 #include "RSXFIFO.h"
 #include "RSXOffload.h"
 #include "RSXZCULL.h"
-#include "rsx_utils.h"
 #include "Common/bitfield.hpp"
 #include "Common/profiling_timer.hpp"
 #include "Common/texture_cache_types.h"
 #include "Common/TextureUtils.h"
 #include "Program/RSXVertexProgram.h"
 #include "Program/RSXFragmentProgram.h"
+#include "Utils/rsx_utils.h"
 
 #include "Utilities/Thread.h"
 #include "Utilities/geometry.h"
@@ -92,6 +92,7 @@ namespace rsx
 		bool supports_host_gpu_labels;         // Advanced host synchronization
 		bool supports_normalized_barycentrics; // Basically all GPUs except NVIDIA have properly normalized barycentrics
 		bool supports_last_provoking_vertex;   // Flat shading using RSX's last-vertex convention
+		bool supports_programmable_blending;   // Can handle programmable blending requests
 	};
 
 	struct desync_fifo_cmd_info
@@ -132,6 +133,7 @@ namespace rsx
 		u32 saved_fifo_ret = RSX_CALL_STACK_EMPTY;
 		u32 restore_fifo_cmd = 0;
 		u32 restore_fifo_count = 0;
+		u32 restore_fifo_position  = 0;
 
 		// Occlusion query
 		bool zcull_surface_active = false;
@@ -174,6 +176,9 @@ namespace rsx
 		u32 restore_point = 0;
 		u32 dbg_step_pc = 0;
 		u32 last_known_code_start = 0;
+		u32 last_code_jump = 0;
+		u32 last_sema_cmd = 0;
+		u32 last_sema_addr = 0;
 		atomic_t<u32> external_interrupt_lock{ 0 };
 		atomic_t<bool> external_interrupt_ack{ false };
 		atomic_t<u32> is_initialized{0};

@@ -83,6 +83,7 @@ namespace gui
 		case trophy_list_columns::id: return "trophy_column_id";
 		case trophy_list_columns::platinum_link: return "trophy_column_platinum_link";
 		case trophy_list_columns::time_unlocked: return "trophy_column_time_unlocked";
+		case trophy_list_columns::trophy_set: return "trophy_column_trophy_set";
 		case trophy_list_columns::count: return "";
 		}
 	
@@ -97,6 +98,11 @@ namespace gui
 		case trophy_game_list_columns::name: return "trophy_game_column_name";
 		case trophy_game_list_columns::progress: return "trophy_game_column_progress";
 		case trophy_game_list_columns::trophies: return "trophy_game_column_trophies";
+		case trophy_game_list_columns::bronze: return "trophy_game_column_bronze";
+		case trophy_game_list_columns::silver: return "trophy_game_column_silver";
+		case trophy_game_list_columns::gold: return "trophy_game_column_gold";
+		case trophy_game_list_columns::platinum: return "trophy_game_column_platinum";
+		case trophy_game_list_columns::comm_id: return "trophy_game_column_comm_id";
 		case trophy_game_list_columns::count: return "";
 		}
 	
@@ -306,19 +312,6 @@ QSet<QString> gui_settings::GetGamesInCollection(const QString& name) const
 	return gui::utils::list_to_set(GetValue(gui::game_collection, gc_games_prefix + name, QStringList()).toStringList());
 }
 
-QString gui_settings::GetCollectionOfGame(const QString& serial) const
-{
-	for (const QString& collection : GetGameCollections())
-	{
-		if (GetGamesInCollection(collection).contains(serial))
-		{
-			return collection;
-		}
-	}
-
-	return {};
-}
-
 bool gui_settings::CleanupCollections(const QSet<QString>& serials) const
 {
 	const QStringList& collections = GetGameCollections();
@@ -352,42 +345,34 @@ bool gui_settings::CleanupCollections(const QSet<QString>& serials) const
 	return changed;
 }
 
-bool gui_settings::MoveGamesToCollection(const QSet<QString>& serials, const QString& name) const
+bool gui_settings::SetGameCollectionMembership(const QSet<QString>& serials, const QString& name, bool add) const
 {
-	const QStringList collections = GetGameCollections();
-
-	if (serials.isEmpty() || (!name.isEmpty() && !collections.contains(name)))
+	if (serials.isEmpty() || !GetGameCollections().contains(name))
 	{
 		return false;
 	}
 
-	bool changed = false;
+	QSet<QString> games = GetGamesInCollection(name);
+	const qsizetype old_size = games.size();
 
-	for (const QString& collection : collections)
+	if (add)
 	{
-		const QSet<QString> old_games = GetGamesInCollection(collection);
-		QSet<QString> games = old_games;
-
+		games.unite(serials);
+	}
+	else
+	{
 		games.subtract(serials);
-
-		if (collection == name)
-		{
-			games.unite(serials);
-		}
-
-		if (games != old_games)
-		{
-			SetGamesInCollection(collection, games);
-			changed = true;
-		}
 	}
 
-	if (changed)
+	// unite only adds and subtract only removes, so a size that did not move is a set that did not either
+	if (games.size() == old_size)
 	{
-		sync();
+		return false;
 	}
 
-	return changed;
+	SetGamesInCollection(name, games);
+	sync();
+	return true;
 }
 
 QString gui_settings::GetAllGamesCollectionLabel()

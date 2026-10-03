@@ -627,7 +627,20 @@ bool SCEDecrypter::LoadMetadata(const u8 erk[32], const u8 riv[16])
 {
 	aes_context aes;
 	std::vector<u8> metadata_info(sizeof(meta_info));
-	std::vector<u8> metadata_headers(sce_hdr.se_hsize - (sizeof(sce_hdr) + sce_hdr.se_meta + sizeof(meta_info)));
+	constexpr usz sizeof_meta_and_header = sizeof(meta_info) + sizeof(sce_hdr);
+	const usz metadata_offset = static_cast<usz>(sce_hdr.se_meta);
+
+	if (metadata_offset > usz{umax} - sizeof_meta_and_header ||
+		sce_hdr.se_hsize < sizeof_meta_and_header + metadata_offset ||
+		sce_hdr.se_hsize - (sizeof_meta_and_header + metadata_offset) < sizeof(meta_hdr) ||
+		sce_hdr.se_hsize > sce_f.size())
+	{
+		self_log.error("Invalid SCE metadata header size!");
+		return false;
+	}
+
+	const usz metadata_headers_offset = sizeof_meta_and_header + metadata_offset;
+	std::vector<u8> metadata_headers(sce_hdr.se_hsize - metadata_headers_offset);
 
 	// Locate and read the encrypted metadata info.
 	sce_f.seek(sce_hdr.se_meta + sizeof(sce_hdr));
@@ -722,7 +735,7 @@ bool SCEDecrypter::DecryptData()
 		if (hdr.encrypted == 3)
 		{
 			// Make sure the key and iv are not out of boundaries.
-			if ((hdr.key_idx < meta_hdr.key_count) && (hdr.iv_idx <= meta_hdr.key_count))
+			if ((hdr.key_idx < meta_hdr.key_count) && (hdr.iv_idx < meta_hdr.key_count))
 			{
 				// Get the key and iv from the previously stored key buffer.
 				const std::array<u8, 0x10> data_key = read_from_ptr<std::array<u8, 0x10>>(data_keys, static_cast<usz>(hdr.key_idx) * 0x10);
@@ -1123,7 +1136,20 @@ bool SELFDecrypter::LoadMetadata(const u8* klic_key)
 {
 	aes_context aes;
 	std::vector<u8> metadata_info(sizeof(meta_info));
-	std::vector<u8> metadata_headers(sce_hdr.se_hsize - (sizeof(sce_hdr) + sce_hdr.se_meta + sizeof(meta_info)));
+	constexpr usz sizeof_meta_and_header = sizeof(meta_info) + sizeof(sce_hdr);
+	const usz metadata_offset = static_cast<usz>(sce_hdr.se_meta);
+
+	if (metadata_offset > usz{umax} - sizeof_meta_and_header ||
+		sce_hdr.se_hsize < sizeof_meta_and_header + metadata_offset ||
+		sce_hdr.se_hsize - (sizeof_meta_and_header + metadata_offset) < sizeof(meta_hdr) ||
+		sce_hdr.se_hsize > self_f.size())
+	{
+		self_log.error("Invalid SELF metadata header size!");
+		return false;
+	}
+
+	const usz metadata_headers_offset = sizeof_meta_and_header + metadata_offset;
+	std::vector<u8> metadata_headers(sce_hdr.se_hsize - metadata_headers_offset);
 
 	// Locate and read the encrypted metadata info.
 	self_f.seek(sce_hdr.se_meta + sizeof(sce_hdr));
@@ -1211,7 +1237,7 @@ bool SELFDecrypter::DecryptData()
 	{
 		if (hdr.encrypted == 3)
 		{
-			if ((hdr.key_idx < meta_hdr.key_count) && (hdr.iv_idx <= meta_hdr.key_count))
+			if ((hdr.key_idx < meta_hdr.key_count) && (hdr.iv_idx < meta_hdr.key_count))
 				data_buf_length += ::narrow<u32>(hdr.data_size);
 		}
 	}
@@ -1233,7 +1259,7 @@ bool SELFDecrypter::DecryptData()
 		if (hdr.encrypted == 3)
 		{
 			// Make sure the key and iv are not out of boundaries.
-			if ((hdr.key_idx < meta_hdr.key_count) && (hdr.iv_idx <= meta_hdr.key_count))
+			if ((hdr.key_idx < meta_hdr.key_count) && (hdr.iv_idx < meta_hdr.key_count))
 			{
 				// Get the key and iv from the previously stored key buffer.
 				const std::array<u8, 0x10> data_key = read_from_ptr<std::array<u8, 0x10>>(data_keys, static_cast<usz>(hdr.key_idx) * 0x10);

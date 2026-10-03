@@ -52,6 +52,7 @@ namespace gui
 		id = 5,
 		platinum_link = 6,
 		time_unlocked = 7,
+		trophy_set = 8,
 
 		count
 	};
@@ -62,6 +63,11 @@ namespace gui
 		name = 1,
 		progress = 2,
 		trophies = 3,
+		bronze = 4,
+		silver = 5,
+		gold = 6,
+		platinum = 7,
+		comm_id = 8,
 
 		count
 	};
@@ -302,6 +308,7 @@ namespace gui
 	const gui_save tr_icon_color    = gui_save(trophy, "icon_color",    gl_icon_color);
 	const gui_save tr_icon_height   = gui_save(trophy, "icon_height",   75);
 	const gui_save tr_game_iconSize = gui_save(trophy, "game_iconSize", 25);
+	const gui_save tr_game_icon_width = gui_save(trophy, "game_icon_width", 0);
 	const gui_save tr_show_locked   = gui_save(trophy, "show_locked",   true);
 	const gui_save tr_show_unlocked = gui_save(trophy, "show_unlocked", true);
 	const gui_save tr_show_hidden   = gui_save(trophy, "show_hidden",   false);
@@ -378,16 +385,13 @@ public:
 	void SetCurrentGameCollection(const QString& name, bool sync = true) const;
 	QSet<QString> GetGamesInCollection(const QString& name) const;
 
-	/** Returns the game collection the given game belongs to, empty if it belongs to none */
-	QString GetCollectionOfGame(const QString& serial) const;
-
 	/** Cleans up all game collections according to the provided serials.
 	    Returns whether anything actually changed. */
 	bool CleanupCollections(const QSet<QString>& serials) const;
 
-	/** Moves the given games to a game collection, removing them from any other one. An empty name only
-	    removes them. Returns whether anything actually changed. */
-	bool MoveGamesToCollection(const QSet<QString>& serials, const QString& name) const;
+	/** Puts the given games in a game collection or takes them out of it, leaving every collection they
+	    already belong to alone. Returns whether anything actually changed. */
+	bool SetGameCollectionMembership(const QSet<QString>& serials, const QString& name, bool add) const;
 
 	/** Label of the default game collection entry. Reserved, so it can never name a real collection. */
 	static QString GetAllGamesCollectionLabel();

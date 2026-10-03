@@ -52,6 +52,7 @@ enum class emu_settings_type
 	DisableSpinOptimization,
 	EnabledSPUEventsBusyLoop,
 	PPUReservationPriorityOverSPUs,
+	AccurateSpuReservations,
 
 	// Graphics
 	Renderer,
@@ -111,7 +112,9 @@ enum class emu_settings_type
 	DisableAsyncHostMM,
 	UseReBAR,
 	RecordWithOverlays,
+	DisableHWBlending,
 	DisableHWTexelRemapping,
+	DisableBlitEngineScaling,
 
 	// Anaglyph Matrix
 	CustomAnaglyphMatrixLeft,
@@ -231,6 +234,7 @@ enum class emu_settings_type
 	EmptyHdd0Tmp,
 	LimitCacheSize,
 	MaximumCacheSize,
+	EmulateHddSpeed,
 
 	// Log
 	Log,

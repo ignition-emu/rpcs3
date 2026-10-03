@@ -147,7 +147,14 @@ VkRenderPass VKGSRender::get_render_pass()
 void VKGSRender::invalidate_render_pass()
 {
 	// Regenerate renderpass key for the next draw call
-	if (const auto key = vk::get_renderpass_key(m_fbo_images, m_current_renderpass_key);
+	std::vector<u8> input_attachments{};
+	if (current_fragment_program.ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING)
+	{
+		input_attachments.resize(m_draw_buffers.size());
+		std::iota(input_attachments.begin(), input_attachments.end(), 0);
+	}
+
+	if (const auto key = vk::get_renderpass_key(m_fbo_images, m_current_renderpass_key, input_attachments);
 		key != m_current_renderpass_key)
 	{
 		m_current_renderpass_key = key;
@@ -168,7 +175,7 @@ void VKGSRender::update_draw_state()
 		vkCmdSetLineWidth(*m_current_command_buffer, actual_line_width);
 	}
 
-	if (rsx::method_registers.blend_enabled())
+	if (rsx::method_registers.blend_enabled_mask())
 	{
 		// Update blend constants
 		auto blend_colors = rsx::get_constant_blend_colors();
@@ -781,6 +788,19 @@ bool VKGSRender::bind_texture_env()
 		m_program->bind_uniform({ *view, vk::null_sampler() }, vk::glsl::binding_set_index_fragment, m_fs_binding_table->frag_depth_input_location);
 	}
 
+	if (current_fragment_program.ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING)
+	{
+		ensure(current_fragment_program.mrt_buffers_count == m_draw_buffers.size());
+		const auto remap = rsx::default_remap_vector.with_encoding(vk::VK_REMAP_IDENTITY);
+
+		for (u32 i = 0; i < current_fragment_program.mrt_buffers_count; ++i)
+		{
+			auto viewable = static_cast<vk::viewable_image*>(m_fbo_images[i]);
+			const auto view = viewable->get_view(remap);
+			m_program->bind_uniform(*view, vk::glsl::binding_set_index_fragment, m_fs_binding_table->frag_src_location[i]);
+		}
+	}
+
 	return out_of_memory;
 }
 
@@ -1088,6 +1108,27 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		reload_state = true;
 	});
 
+	if (current_fragment_program.ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING)
+	{
+		// Subpass inter-draw dependency for input attachment reads. Preserves open renderpasses.
+		for (u32 i = 0; i < current_fragment_program.mrt_buffers_count; ++i)
+		{
+			vk::insert_image_memory_barrier(
+				*m_current_command_buffer,
+				m_fbo_images[i]->value,
+				m_fbo_images[i]->current_layout,
+				m_fbo_images[i]->current_layout,
+				VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_ACCESS_INPUT_ATTACHMENT_READ_BIT,
+				{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+				true,
+				VK_DEPENDENCY_BY_REGION_BIT
+			);
+		}
+	}
+
 	// Bind both pipe and descriptors in one go
 	// FIXME: We only need to rebind the pipeline when reload state is set. Flags?
 	m_program->bind(*m_current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS);
@@ -1125,15 +1166,15 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 		else if (m_device->get_multidraw_support())
 		{
-			const auto subranges = draw_call.get_subranges();
-			auto ptr = utils::bless<const VkMultiDrawInfoEXT>(& subranges.front().first);
+			const auto& subranges = draw_call.get_subranges();
+			auto ptr = utils::bless<const VkMultiDrawInfoEXT>(&subranges.front().first);
 			_vkCmdDrawMultiEXT(*m_current_command_buffer, ::size32(subranges), ptr, 1, 0, sizeof(rsx::draw_range_t));
 		}
 		else
 		{
 			u32 vertex_offset = 0;
-			const auto subranges = draw_call.get_subranges();
-			for (const auto &range : subranges)
+			const auto& subranges = draw_call.get_subranges();
+			for (const auto& range : subranges)
 			{
 				vkCmdDraw(*m_current_command_buffer, range.count, 1, vertex_offset, 0);
 				vertex_offset += range.count;
@@ -1157,7 +1198,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 		else if (m_device->get_multidraw_support())
 		{
-			const auto subranges = draw_call.get_subranges();
+			const auto& subranges = draw_call.get_subranges();
 			const auto subranges_count = ::size32(subranges);
 			const auto allocation_size = subranges_count * sizeof(VkMultiDrawIndexedInfoEXT);
 
@@ -1182,8 +1223,8 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		else
 		{
 			u32 vertex_offset = 0;
-			const auto subranges = draw_call.get_subranges();
-			for (const auto &range : subranges)
+			const auto& subranges = draw_call.get_subranges();
+			for (const auto& range : subranges)
 			{
 				const auto count = get_index_count(draw_call.primitive, range.count);
 				vkCmdDrawIndexed(*m_current_command_buffer, count, 1, vertex_offset, 0, 0);
