@@ -56,6 +56,30 @@ jobs:
           path: librpcs3_ignition-raw.zip
           compression-level: 0
 
+      # The release asset: the module with its Homebrew dependencies copied in
+      # and its install names repaired, bundled here because this runner has
+      # the libraries it was linked against. The build points Qt at the
+      # Homebrew qtbase keg, so that keg is installed first.
+      - name: Bundle module
+        run: |
+          brew install --quiet qtbase
+          dylib=$(find build -name librpcs3_ignition.dylib | head -1)
+          python3 .ci/package-ignition-module.py "$dylib" bundle/librpcs3_ignition --source-root .
+          if otool -L bundle/librpcs3_ignition/librpcs3_ignition.dylib bundle/librpcs3_ignition/lib/*.dylib | grep -i sdl; then
+            echo "the module still links SDL" >&2
+            exit 1
+          fi
+          cat bundle/SHA256SUMS
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@main
+        with:
+          name: rpcs3_ignition-macos-arm64-bundle
+          path: |
+            bundle/librpcs3_ignition.dylib.zip
+            bundle/SHA256SUMS
+          compression-level: 0
+
       # No release step. This workflow used to attach the bare module to the tag
       # as librpcs3_ignition.dylib.zip -- the same name the packaged bundle is
       # published under and the name Ignition's manifest pins. It overwrote that
@@ -64,6 +88,6 @@ jobs:
       # the checksum no longer matched, and the raw module carries 89 absolute
       # /opt/homebrew paths that resolve on no machine but the builder's.
       #
-      # A release asset is now published deliberately, from a bundle that
-      # scripts/package-ps3-module.py has closed over its dependencies. Take the
-      # artifact above as that script's input.
+      # A release asset is now published deliberately, by hand, from the
+      # rpcs3_ignition-macos-arm64-bundle artifact that the Bundle module step
+      # makes.

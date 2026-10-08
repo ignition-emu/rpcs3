@@ -83,6 +83,12 @@ git submodule -q update --init --depth=1 --jobs=8 $(awk '/path/ && !/llvm/ && !/
 
 mkdir build && cd build || exit 1
 
+# The Ignition module takes its pads from the host as LDD pads, and the host
+# (Godot) links its own SDL3. A second SDL3 in one process registers the same
+# Objective-C classes twice, which macOS warns can crash, so the module is
+# built without SDL.
+if [ "${WITH_IGNITION:-OFF}" = "ON" ]; then USE_SDL=OFF; else USE_SDL=ON; fi
+
 if [ "$AARCH64" -eq 1 ]; then
 cmake .. \
     -DBUILD_RPCS3_TESTS="${RUN_UNIT_TESTS}" \
@@ -93,7 +99,7 @@ cmake .. \
     -DMACOSX_BUNDLE_BUNDLE_VERSION="${COMM_COUNT}" \
     -DSTATIC_LINK_LLVM=ON \
     -DWITH_IGNITION="${WITH_IGNITION:-OFF}" \
-    -DUSE_SDL=ON \
+    -DUSE_SDL="$USE_SDL" \
     -DUSE_DISCORD_RPC=ON \
     -DUSE_AUDIOUNIT=ON \
     -DUSE_SYSTEM_FFMPEG=OFF \
@@ -116,7 +122,7 @@ cmake .. \
     -DMACOSX_BUNDLE_BUNDLE_VERSION="${COMM_COUNT}"\
     -DSTATIC_LINK_LLVM=ON \
     -DWITH_IGNITION="${WITH_IGNITION:-OFF}" \
-    -DUSE_SDL=ON \
+    -DUSE_SDL="$USE_SDL" \
     -DUSE_DISCORD_RPC=ON \
     -DUSE_AUDIOUNIT=ON \
     -DUSE_SYSTEM_FFMPEG=OFF \
