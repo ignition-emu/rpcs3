@@ -79,6 +79,13 @@ endif()
 if(APPLE)
 	target_sources(rpcs3_ignition PRIVATE ignition_metal.mm)
 	target_link_libraries(rpcs3_ignition PRIVATE iconv "-framework CoreVideo" "-framework Foundation" "-framework AppKit" "-framework QuartzCore" "-framework Metal")
+
+	# The Vulkan driver the bundle's manifest names: it forwards to the host's
+	# MoltenVK, so the process does not load a second one (ignition_host_icd.c).
+	# Built with the module, so `ninja rpcs3_ignition` makes both.
+	add_library(rpcs3_ignition_icd SHARED ignition_host_icd.c)
+	set_target_properties(rpcs3_ignition_icd PROPERTIES C_VISIBILITY_PRESET hidden)
+	add_dependencies(rpcs3_ignition rpcs3_ignition_icd)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_link_libraries(rpcs3_ignition PRIVATE rt)
 

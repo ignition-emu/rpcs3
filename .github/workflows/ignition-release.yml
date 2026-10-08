@@ -47,7 +47,8 @@ jobs:
       - name: Package
         run: |
           dylib=$(find build -name librpcs3_ignition.dylib | head -1)
-          zip -j librpcs3_ignition-raw.zip "$dylib"
+          icd=$(find build -name librpcs3_ignition_icd.dylib | head -1)
+          zip -j librpcs3_ignition-raw.zip "$dylib" "$icd"
 
       - name: Upload artifact
         uses: actions/upload-artifact@main
@@ -64,7 +65,8 @@ jobs:
         run: |
           brew install --quiet qtbase
           dylib=$(find build -name librpcs3_ignition.dylib | head -1)
-          python3 .ci/package-ignition-module.py "$dylib" bundle/librpcs3_ignition --source-root .
+          icd=$(find build -name librpcs3_ignition_icd.dylib | head -1)
+          python3 .ci/package-ignition-module.py "$dylib" bundle/librpcs3_ignition --source-root . --icd "$icd"
           if otool -L bundle/librpcs3_ignition/librpcs3_ignition.dylib bundle/librpcs3_ignition/lib/*.dylib | grep -i sdl; then
             echo "the module still links SDL" >&2
             exit 1

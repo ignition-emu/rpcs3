@@ -30,6 +30,8 @@ def main():
     parser.add_argument("output", type=Path, help="New bundle directory")
     parser.add_argument("--source-root", type=Path, required=True, help="RPCS3 checkout matching the CI artifact")
     parser.add_argument("--molten-vk", type=Path, default=Path("/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib"))
+    parser.add_argument("--icd", type=Path, required=True,
+                        help="librpcs3_ignition_icd.dylib, the driver that forwards to the host's MoltenVK")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "lib").mkdir()
@@ -37,7 +39,8 @@ def main():
     originals = {}
     formulae = set()
     queue = [(args.module.resolve(), args.output / "librpcs3_ignition.dylib"),
-             (args.molten_vk.resolve(), args.output / "lib/libMoltenVK.dylib")]
+             (args.molten_vk.resolve(), args.output / "lib/libMoltenVK.dylib"),
+             (args.icd.resolve(), args.output / "lib/librpcs3_ignition_icd.dylib")]
     while queue:
         source, target = queue.pop(0)
         if target in originals:
@@ -81,9 +84,12 @@ def main():
     # The Vulkan loader also finds its driver at run time, outside dyld's
     # dependency list. The host points VK_DRIVER_FILES at this manifest while
     # an instance exists, so a Homebrew installation is not required to find it.
+    # The driver it names forwards to the host's own MoltenVK, and loads the
+    # bundled libMoltenVK.dylib only in a host that has none.
     (args.output / "MoltenVK_icd.json").write_text(json.dumps({
         "file_format_version": "1.0.0", "ICD": {
-            "library_path": "lib/libMoltenVK.dylib", "api_version": "1.4.0", "is_portability_driver": True}}, indent=2) + "\n")
+            "library_path": "lib/librpcs3_ignition_icd.dylib", "api_version": "1.4.0",
+            "is_portability_driver": True}}, indent=2) + "\n")
     for formula in sorted(formulae):
         for file in formula.rglob("*"):
             if file.is_file() and re.match(r"^(LICENSE|LICENCE|COPYING|NOTICE)([._-]|$)", file.name, re.I):
