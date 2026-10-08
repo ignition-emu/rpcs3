@@ -87,11 +87,13 @@ git submodule -q update --init --depth=1 --jobs=8 $(awk '/path/ && !/llvm/ && !/
 
 mkdir build && cd build || exit 1
 
-# The Ignition module takes its pads from the host as LDD pads, and the host
-# (Godot) links its own SDL3. A second SDL3 in one process registers the same
-# Objective-C classes twice, which macOS warns can crash, so the module is
-# built without SDL.
+# The Ignition module takes its pads from the host as LDD pads and its audio
+# through its own capturing backend, and the host (Godot) links its own SDL3.
+# A second SDL3 in one process registers the same Objective-C classes twice,
+# which macOS warns can crash, so the module is built without SDL and without
+# FAudio, which links SDL3 for itself.
 if [ "${WITH_IGNITION:-OFF}" = "ON" ]; then USE_SDL=OFF; else USE_SDL=ON; fi
+USE_FAUDIO=$USE_SDL
 
 if [ "$AARCH64" -eq 1 ]; then
 cmake .. \
@@ -104,6 +106,7 @@ cmake .. \
     -DSTATIC_LINK_LLVM=ON \
     -DWITH_IGNITION="${WITH_IGNITION:-OFF}" \
     -DUSE_SDL="$USE_SDL" \
+    -DUSE_FAUDIO="$USE_FAUDIO" \
     -DUSE_DISCORD_RPC=ON \
     -DUSE_AUDIOUNIT=ON \
     -DUSE_SYSTEM_FFMPEG=OFF \
@@ -127,6 +130,7 @@ cmake .. \
     -DSTATIC_LINK_LLVM=ON \
     -DWITH_IGNITION="${WITH_IGNITION:-OFF}" \
     -DUSE_SDL="$USE_SDL" \
+    -DUSE_FAUDIO="$USE_FAUDIO" \
     -DUSE_DISCORD_RPC=ON \
     -DUSE_AUDIOUNIT=ON \
     -DUSE_SYSTEM_FFMPEG=OFF \
