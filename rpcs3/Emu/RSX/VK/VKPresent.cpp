@@ -662,7 +662,10 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	const bool user_is_recording = (g_recording_mode != recording_mode::stopped && m_frame->can_consume_frame());
 	const bool need_media_capture = user_asked_for_screenshot || user_is_recording;
 
-	const auto render_overlays = [&](vk::framebuffer_holder* fbo, const areau& area)
+	const areau swapchain_area = {0, 0, static_cast<u32>(m_swapchain_dims.width), static_cast<u32>(m_swapchain_dims.height)};
+
+	// `window_area` is where an overlay that uses window space is drawn.
+	const auto render_overlays = [&](vk::framebuffer_holder* fbo, const areau& area, const areau& window_area)
 	{
 		if (!has_overlay) return;
 
@@ -670,10 +673,9 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
 		std::lock_guard lock(*m_overlay_manager);
 
-		const areau display_area = {0, 0, static_cast<u32>(m_swapchain_dims.width), static_cast<u32>(m_swapchain_dims.height)};
 		for (const auto& view : m_overlay_manager->get_views())
 		{
-			const areau render_area = view->use_window_space ? display_area : area;
+			const areau render_area = view->use_window_space ? window_area : area;
 			ui_renderer->run(*m_current_command_buffer, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
 		}
 	};
@@ -682,7 +684,28 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	// That introduces a WRITE_AFTER_PRESENT (from the previous present) when we later try to present on a different CB
 	if (image_to_flip && need_media_capture)
 	{
-		const usz sshot_size = buffer_height * buffer_width * 4;
+		// With an overlay drawn into the capture, the frame is first scaled up
+		// to fit the size an offscreen host shows it at
+		// (vk::g_offscreen_output_size), keeping its shape, so the overlay is
+		// drawn at that size and not scaled up with the frame afterwards.
+		const bool overlay_in_capture = g_cfg.video.record_with_overlays && has_overlay;
+		u32 capture_width = buffer_width;
+		u32 capture_height = buffer_height;
+		if (const u64 output = vk::g_offscreen_output_size.load(); overlay_in_capture && output)
+		{
+			const u32 output_width = static_cast<u32>(output >> 32);
+			const u32 output_height = static_cast<u32>(output);
+			const double scale = std::min(static_cast<double>(output_width) / buffer_width,
+				static_cast<double>(output_height) / buffer_height);
+			if (scale > 1.0)
+			{
+				capture_width = static_cast<u32>(buffer_width * scale);
+				capture_height = static_cast<u32>(buffer_height * scale);
+			}
+		}
+		const bool scaled_capture = capture_width != buffer_width || capture_height != buffer_height;
+
+		const usz sshot_size = capture_height * capture_width * 4;
 
 		vk::buffer sshot_vkbuf(*m_device, utils::align(sshot_size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
@@ -698,13 +721,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		copy_info.imageOffset.x = 0;
 		copy_info.imageOffset.y = 0;
 		copy_info.imageOffset.z = 0;
-		copy_info.imageExtent.width = buffer_width;
-		copy_info.imageExtent.height = buffer_height;
+		copy_info.imageExtent.width = capture_width;
+		copy_info.imageExtent.height = capture_height;
 		copy_info.imageExtent.depth = 1;
 
 		vk::image* image_to_copy = image_to_flip;
 
-		if (g_cfg.video.record_with_overlays && has_overlay)
+		if (overlay_in_capture)
 		{
 			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
 			single_target_pass = vk::get_renderpass(*m_device, key);
@@ -714,8 +737,8 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			{
 				// Validate
 				if (m_overlay_recording_img->format() != image_to_flip->format() ||
-					m_overlay_recording_img->width() != image_to_flip->width() ||
-					m_overlay_recording_img->height() != image_to_flip->height())
+					m_overlay_recording_img->width() != (scaled_capture ? capture_width : image_to_flip->width()) ||
+					m_overlay_recording_img->height() != (scaled_capture ? capture_height : image_to_flip->height()))
 				{
 					// Dispose correctly
 					vk::remove_framebuffers_with_image(m_overlay_recording_img.get());
@@ -726,7 +749,8 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			if (!m_overlay_recording_img)
 			{
 				m_overlay_recording_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					VK_IMAGE_TYPE_2D, image_to_flip->format(), image_to_flip->width(), image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+					VK_IMAGE_TYPE_2D, image_to_flip->format(),
+					scaled_capture ? capture_width : image_to_flip->width(), scaled_capture ? capture_height : image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 					0, VMM_ALLOCATION_POOL_SYSTEM);
 			}
@@ -734,15 +758,20 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-			const areai rect = areai(0, 0, buffer_width, buffer_height);
-			vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect);
+			// A plain copy when the sizes match, a linear blit when scaled.
+			const areai capture_rect = areai(0, 0, capture_width, capture_height);
+			vk::copy_scaled_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(),
+				{ 0, 0, 0, static_cast<s32>(buffer_width), static_cast<s32>(buffer_height), 1 },
+				{ 0, 0, 0, static_cast<s32>(capture_width), static_cast<s32>(capture_height), 1 },
+				{}, true, VK_FILTER_LINEAR);
 
 			image_to_flip->pop_layout(*m_current_command_buffer);
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-			vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, buffer_width, buffer_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
+			vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, capture_width, capture_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
 			sshot_fbo->add_ref();
-			render_overlays(sshot_fbo, areau(rect));
+			// Scaled, the capture is the whole surface the host shows.
+			render_overlays(sshot_fbo, areau(capture_rect), scaled_capture ? areau(capture_rect) : swapchain_area);
 			sshot_fbo->release();
 
 			image_to_copy = m_overlay_recording_img.get();
@@ -762,11 +791,11 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 		if (user_asked_for_screenshot)
 		{
-			m_frame->take_screenshot(std::move(sshot_frame), buffer_width, buffer_height, is_bgra);
+			m_frame->take_screenshot(std::move(sshot_frame), capture_width, capture_height, is_bgra);
 		}
 		else
 		{
-			m_frame->present_frame(std::move(sshot_frame), buffer_width * 4, buffer_width, buffer_height, is_bgra);
+			m_frame->present_frame(std::move(sshot_frame), capture_width * 4, capture_width, capture_height, is_bgra);
 		}
 	}
 
@@ -909,7 +938,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 		direct_fbo->add_ref();
 
-		render_overlays(direct_fbo, areau(aspect_ratio));
+		render_overlays(direct_fbo, areau(aspect_ratio), swapchain_area);
 
 		if (g_cfg.video.debug_overlay)
 		{

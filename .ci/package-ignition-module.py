@@ -105,6 +105,10 @@ def main():
             target = source_licenses / file.relative_to(args.source_root)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file, target)
+    # The button glyphs of RPCS3's own dialogs. RPCS3 looks for them beside its
+    # executable, which is the host here, and the module copies them from
+    # beside itself into its config dir (install_overlay_icons).
+    shutil.copytree(args.source_root / "bin/Icons/ui", args.output / "Icons/ui")
     (args.output / "release.json").write_text(json.dumps({
         "abi": 4, "source_commit": source_commit,
         "source": f"https://github.com/ignition-emu/rpcs3/tree/{source_commit}",

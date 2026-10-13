@@ -152,6 +152,15 @@ IGNITION_PS3_API uint32_t ignition_ps3_pump(ignition_ps3*);
 // Takes the newest presented frame, if one arrived since the last take. Returns
 // 1 and fills `out` (valid until the next take), or 0 if nothing new.
 IGNITION_PS3_API int32_t ignition_ps3_take_frame(ignition_ps3*, ignition_ps3_frame* out);
+// The size, in pixels, that the host shows the frames at; 0 by 0 when it does
+// not say. While RPCS3 shows one of its own dialogs or overlays, take_frame
+// then returns the frame scaled up to fit this size, keeping its shape, with
+// the overlay drawn at that size, as on a window of that size. Other frames
+// keep the game's own size. Call again whenever the size changes.
+//
+// Optional within ABI 4: modules from ignition-v0.1.6 export it, earlier ones
+// do not, so a host resolves it by name and skips the call without it.
+IGNITION_PS3_API void ignition_ps3_set_output_size(ignition_ps3*, uint32_t width, uint32_t height);
 
 // The pad the emulator reads until replaced. Set once per tick, like the
 // libretro host's input snapshot.

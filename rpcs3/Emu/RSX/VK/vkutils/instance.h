@@ -4,6 +4,7 @@
 #include "swapchain.h"
 
 #include <algorithm>
+#include <atomic>
 #include <vector>
 
 #ifdef __APPLE__
@@ -18,6 +19,12 @@ namespace vk
 	// swapchain is then a set of plain images and no surface is created.
 	// Set before the renderer is created.
 	extern bool g_offscreen_present;
+
+	// The size, in pixels, that such a host shows the frames at: width in the
+	// high 32 bits, height in the low, 0 when it has not said. While an overlay
+	// is visible, the capture path scales the frame up to fit this size before
+	// it draws the overlay, so the overlay is drawn at the size it is seen at.
+	extern std::atomic<u64> g_offscreen_output_size;
 
 	class supported_extensions
 	{

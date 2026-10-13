@@ -278,6 +278,10 @@ def main():
         "bundled": inventory,
         "system": {name: str(path) if path else None for name, path in system.items()},
     }, indent=2) + "\n")
+    # The button glyphs of RPCS3's own dialogs. RPCS3 looks for them beside its
+    # executable, which is the host here, and the module copies them from
+    # beside itself into its config dir (install_overlay_icons).
+    shutil.copytree(args.source_root / "bin/Icons/ui", output / "Icons/ui")
     (output / "release.json").write_text(json.dumps({
         "abi": abi,
         "source_commit": source_commit,

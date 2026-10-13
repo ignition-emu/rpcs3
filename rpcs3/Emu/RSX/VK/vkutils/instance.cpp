@@ -285,6 +285,7 @@ namespace vk
 	}
 
 	bool g_offscreen_present = false;
+	std::atomic<u64> g_offscreen_output_size{0};
 
 	// Swapchain images that are never shown: frames leave through the RSX
 	// capture path. A native swapchain with no present queue, so the renderer

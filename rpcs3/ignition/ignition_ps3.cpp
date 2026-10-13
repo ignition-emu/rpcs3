@@ -58,6 +58,11 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 // Xlib's macros, which VKGSRender.h brings in through the X11 swapchain, collide
 // with Qt's declarations; nothing below uses them.
@@ -902,6 +907,62 @@ uint32_t ignition_ps3_abi_version(void)
 	return IGNITION_PS3_ABI_VERSION;
 }
 
+// The folder this module was loaded from, with a trailing '/', or "".
+static std::string module_dir()
+{
+#ifdef _WIN32
+	HMODULE module = nullptr;
+	if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast<LPCWSTR>(&ignition_ps3_create), &module))
+	{
+		return {};
+	}
+	std::wstring path(MAX_PATH, L'\0');
+	const DWORD length = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
+	if (length == 0 || length >= path.size())
+	{
+		return {};
+	}
+	path.resize(length);
+	std::string utf8 = wchar_to_utf8(path);
+	std::replace(utf8.begin(), utf8.end(), '\\', '/');
+#else
+	Dl_info info{};
+	if (!dladdr(reinterpret_cast<void*>(&ignition_ps3_create), &info) || !info.dli_fname)
+	{
+		return {};
+	}
+	const std::string utf8 = info.dli_fname;
+#endif
+	const usz slash = utf8.rfind('/');
+	return slash == std::string::npos ? std::string{} : utf8.substr(0, slash + 1);
+}
+
+// RPCS3 draws the button glyphs of its dialogs from Icons/ui, which it looks
+// for in the config dir and then beside the executable
+// (resource_config::load_icon). The executable is the host here, so the
+// module's bundle carries Icons/ui beside the module, and each one missing
+// from the config dir is copied there. Without them a dialog such as a game's
+// data-install prompt shows no Cross.
+static void install_overlay_icons()
+{
+	const std::string dir = module_dir();
+	const std::string from = dir + "Icons/ui/";
+	if (dir.empty() || !fs::is_dir(from))
+	{
+		return;
+	}
+	const std::string to = fs::get_config_dir() + "Icons/ui/";
+	fs::create_path(to);
+	for (const auto& entry : fs::dir(from))
+	{
+		if (!entry.is_directory && !fs::is_file(to + entry.name))
+		{
+			fs::copy_file(from + entry.name, to + entry.name, false);
+		}
+	}
+}
+
 ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 {
 	if (g_inst)
@@ -1018,7 +1079,14 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	g_progress_drawn_by_host = true;
 	Emulator::SaveSettings(g_cfg.to_string(), {});
 
+	install_overlay_icons();
+
 	return self;
+}
+
+void ignition_ps3_set_output_size(ignition_ps3*, uint32_t width, uint32_t height)
+{
+	vk::g_offscreen_output_size = (width && height) ? (static_cast<u64>(width) << 32) | height : 0;
 }
 
 // Shutdown is asynchronous in RPCS3: Kill signals the threads and an
