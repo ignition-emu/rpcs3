@@ -56,6 +56,8 @@
 #include "Utilities/JIT.h"
 
 #include "Emu/IPC_socket.h"
+#include "Emu/Io/SkylanderPortalIPC.h"
+#include "Emu/Io/SkylanderPortalIPC_config.h"
 
 #if defined(HAVE_VULKAN)
 #include "Emu/RSX/VK/VulkanAPI.h"
@@ -822,6 +824,15 @@ void Emulator::Init()
 	{
 		g_fxo->init<IPC_socket::IPC_server_manager>(true);
 	}
+
+	// Load Skylanders IPC config and start server if enabled
+	g_cfg_sky_ipc.load();
+	sys_log.notice("Using Skylanders IPC config:\n%s", g_cfg_sky_ipc.to_string());
+
+	if (g_cfg_sky_ipc.get_server_enabled())
+	{
+		g_fxo->init<SkylanderPortalIPCServerManager>(true);
+	}
 }
 
 void Emulator::SetUsr(const std::string& user)
@@ -935,7 +946,7 @@ bool Emulator::BootRsxCapture(const std::string& path)
 	g_cfg.video.disable_on_disk_shader_cache.set(true);
 
 	vm::init();
-	vm::reserve_map(vm::main, 0, 0x1FFF0000, vm::page_64k_size);
+	vm::reserve_map(vm::main, 0x10000, 0x1FFF0000, vm::page_64k_size);
 	g_fxo->init(false);
 
 	// Initialize progress dialog
@@ -996,7 +1007,7 @@ bool Emulator::BootBigPictureMode()
 	g_cfg.video.disable_on_disk_shader_cache.set(true);
 
 	vm::init();
-	vm::reserve_map(vm::main, 0, 0x1FFF0000, vm::page_64k_size);
+	vm::reserve_map(vm::main, 0x10000, 0x1FFF0000, vm::page_64k_size);
 	g_fxo->init(false);
 
 	// Initialize progress dialog
@@ -1931,7 +1942,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			g_emu_callbacks.on_ready();
 			ensure(g_fxo->init<main_ppu_module<lv2_obj>>());
 			vm::init();
-			vm::reserve_map(vm::main, 0, 0x1FFF0000, vm::page_64k_size);
+			vm::reserve_map(vm::main, 0x10000, 0x1FFF0000, vm::page_64k_size);
 			m_force_boot = false;
 
 			// Force LLVM recompiler

@@ -65,6 +65,7 @@ option(BUILD_RPCS3_TESTS "Build RPCS3 unit tests." OFF)
 option(WITH_IGNITION "Build the Ignition PS3 embed module (rpcs3_ignition)" OFF)
 option(RUN_RPCS3_TESTS "Run RPCS3 unit tests. Requires BUILD_RPCS3_TESTS" OFF)
 option(USE_GAMEMODE "Choose whether to enable GameMode features or not." ON)
+option(BUNDLE_UDEV_RULES "Include udev rules on Linux/FreeBSD" OFF)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/buildfiles/cmake")
 
