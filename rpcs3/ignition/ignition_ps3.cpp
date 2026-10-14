@@ -938,12 +938,34 @@ static std::string module_dir()
 	return slash == std::string::npos ? std::string{} : utf8.substr(0, slash + 1);
 }
 
-// RPCS3 draws the button glyphs of its dialogs from Icons/ui, which it looks
-// for in the config dir and then beside the executable
-// (resource_config::load_icon). The executable is the host here, so the
-// module's bundle carries Icons/ui beside the module, and each one missing
-// from the config dir is copied there. Without them a dialog such as a game's
-// data-install prompt shows no Cross.
+// Copies each file under `from` that `to` lacks, folders included. Both end
+// with '/'.
+static void copy_missing(const std::string& from, const std::string& to)
+{
+	fs::create_path(to);
+	for (const auto& entry : fs::dir(from))
+	{
+		if (entry.name == "." || entry.name == "..")
+		{
+			continue;
+		}
+		if (entry.is_directory)
+		{
+			copy_missing(from + entry.name + "/", to + entry.name + "/");
+		}
+		else if (!fs::is_file(to + entry.name))
+		{
+			fs::copy_file(from + entry.name, to + entry.name, false);
+		}
+	}
+}
+
+// RPCS3 draws the button glyphs of its dialogs, and the icons of its home
+// menu (home/32), from Icons/ui, which it looks for in the config dir and
+// then beside the executable (resource_config::load_icon). The executable is
+// the host here, so the module's bundle carries Icons/ui beside the module,
+// and each file missing from the config dir is copied there. Without them a
+// dialog such as a game's data-install prompt shows no Cross.
 static void install_overlay_icons()
 {
 	const std::string dir = module_dir();
@@ -952,15 +974,7 @@ static void install_overlay_icons()
 	{
 		return;
 	}
-	const std::string to = fs::get_config_dir() + "Icons/ui/";
-	fs::create_path(to);
-	for (const auto& entry : fs::dir(from))
-	{
-		if (!entry.is_directory && !fs::is_file(to + entry.name))
-		{
-			fs::copy_file(from + entry.name, to + entry.name, false);
-		}
-	}
+	copy_missing(from, fs::get_config_dir() + "Icons/ui/");
 }
 
 ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
