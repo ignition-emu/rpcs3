@@ -128,6 +128,8 @@
     <ClCompile Include="..\Input\dualsense_pad_handler.cpp" />
     <ClCompile Include="..\Input\skateboard_pad_handler.cpp" />
     <ClCompile Include="..\Input\hid_pad_handler.cpp" />
+    <ClCompile Include="..\Input\hid_instance.cpp" />
+    <ClCompile Include="..\Input\wiimote_handler.cpp" />
     <ClCompile Include="..\Input\sdl_pad_handler.cpp" />
     <ClCompile Include="..\Input\sdl_instance.cpp" />
     <ClCompile Include="..\Input\ps_move_handler.cpp" />

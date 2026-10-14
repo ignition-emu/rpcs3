@@ -29,6 +29,8 @@ add_library(rpcs3_ignition SHARED
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/dualsense_pad_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/skateboard_pad_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/hid_pad_handler.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/hid_instance.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/../Input/wiimote_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/sdl_pad_handler.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/sdl_instance.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/../Input/ps_move_handler.cpp
