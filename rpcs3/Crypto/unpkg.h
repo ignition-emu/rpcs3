@@ -381,6 +381,9 @@ public:
 
 	void abort_extract();
 
+	// Installs a VSH module's files straight under vsh/modules/, where the console reads them, not under its install dir
+	void set_vsh_module_in_place(bool in_place) { m_vsh_module_in_place = in_place; }
+
 	fs::file& file()
 	{
 		return m_file;
@@ -407,6 +410,7 @@ private:
 	atomic_t<usz> m_entry_indexer = 0;
 	atomic_t<usz> m_written_bytes = 0;
 	bool m_was_null = false;
+	bool m_vsh_module_in_place = false;
 
 	static constexpr usz BUF_SIZE = 8192 * 1024; // 8 MB
 	static constexpr usz BUF_PADDING = 32;

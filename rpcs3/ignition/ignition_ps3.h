@@ -185,6 +185,25 @@ IGNITION_PS3_API int32_t ignition_ps3_firmware_present(ignition_ps3*);
 // success; negative on a bad or unreadable PUP. Run once before boot.
 IGNITION_PS3_API int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path);
 
+// Installs a PS3 package (.pkg) into dev_hdd0 under the configured dirs, with
+// RPCS3's own installer. A VSH module package (content type 0x0C) lands
+// straight under dev_hdd0/vsh/modules/, where the console reads it; any other
+// content type goes where RPCS3 puts it. Blocks until done and cannot be
+// cancelled. While it runs, ignition_ps3_progress_of reports it (active 2) and
+// may be called from another thread. Run before boot.
+//
+// Optional within ABI 4: modules after ignition-v0.1.6 export it, earlier ones
+// do not, so a host resolves it by name and treats its absence as "module too
+// old".
+enum {
+    IGNITION_PS3_INSTALL_PKG_OK          = 0,
+    IGNITION_PS3_INSTALL_PKG_UNREADABLE  = -1, // a null or empty path, or the file could not be opened
+    IGNITION_PS3_INSTALL_PKG_INVALID     = -2, // not a package, or its header, metadata or key would not read
+    IGNITION_PS3_INSTALL_PKG_FAILED      = -3, // the install stopped; files it added to a new folder are removed
+    IGNITION_PS3_INSTALL_PKG_APP_VERSION = -4, // an update whose target game version is not the one installed
+};
+IGNITION_PS3_API int32_t ignition_ps3_install_package(ignition_ps3*, const char* pkg_path);
+
 // Decrypts one signed PS3 executable (a SELF: a firmware .sprx or .self) to the
 // plain ELF at `elf_out`, with RPCS3's own decrypter -- the decrypt_self call
 // behind `rpcs3 --decrypt`, with no KLIC, so it serves system software and not

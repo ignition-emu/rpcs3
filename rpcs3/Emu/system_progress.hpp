@@ -59,6 +59,7 @@ enum : u32
 {
 	system_progress_source_progress_thread = 0,
 	system_progress_source_shaders = 1,
+	system_progress_source_package = 2,
 };
 
 // Set by a host that draws progress itself from the published snapshot. RPCS3

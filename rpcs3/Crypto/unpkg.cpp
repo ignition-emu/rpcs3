@@ -899,7 +899,8 @@ bool package_reader::set_install_path()
 
 	// TODO: Verify whether other content types require appending title ID
 	// Append title ID depending on content type
-	if (m_metadata.content_type != PKG_CONTENT_TYPE_THEME && m_metadata.content_type != PKG_CONTENT_TYPE_LICENSE)
+	if (m_metadata.content_type != PKG_CONTENT_TYPE_THEME && m_metadata.content_type != PKG_CONTENT_TYPE_LICENSE
+		&& !(m_metadata.content_type == PKG_CONTENT_TYPE_VSH_MODULE && m_vsh_module_in_place))
 	{
 		// The name is read as it comes from the package
 		if (m_install_dir.empty() || leaves_directory(m_install_dir))

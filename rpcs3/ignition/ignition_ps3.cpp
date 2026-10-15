@@ -45,6 +45,7 @@
 #include "Emu/system_utils.hpp"
 #include "Crypto/unself.h"
 #include "Crypto/key_vault.h"
+#include "Crypto/unpkg.h"
 #include "Loader/PUP.h"
 #include "Loader/TAR.h"
 #include <algorithm>
@@ -1449,6 +1450,66 @@ int32_t ignition_ps3_install_firmware(ignition_ps3*, const char* pup_path)
 		}
 	}
 	return 0;
+}
+
+// Installs a package the way RPCS3's own install_pkg does: extract_data on a
+// named thread while this one waits, here publishing the reader's progress.
+int32_t ignition_ps3_install_package(ignition_ps3*, const char* pkg_path)
+{
+	if (!pkg_path || !*pkg_path)
+	{
+		return IGNITION_PS3_INSTALL_PKG_UNREADABLE;
+	}
+	fs::file pkg_f(pkg_path);
+	if (!pkg_f)
+	{
+		return IGNITION_PS3_INSTALL_PKG_UNREADABLE;
+	}
+
+	std::deque<package_reader> readers;
+	package_reader& reader = readers.emplace_back(pkg_path, std::move(pkg_f));
+	if (!reader.is_valid())
+	{
+		return IGNITION_PS3_INSTALL_PKG_INVALID;
+	}
+	reader.set_vsh_module_in_place(true);
+
+	vfs::mount("/dev_hdd0", rpcs3::utils::get_hdd0_dir());
+
+	const std::string title = std::string(psf::get_string(reader.get_psf(), "TITLE", ""));
+	const auto publish = [&](u32 percent)
+	{
+		publish_system_progress({"Installing package", title, percent, true, false, system_progress_source_package});
+	};
+	publish(0);
+
+	package_install_result result{};
+	named_thread worker("PKG Installer", [&readers, &result]
+	{
+		std::deque<std::string> bootable_paths;
+		result = package_reader::extract_data(readers, bootable_paths, false);
+		return result.error == package_install_result::error_type::no_error;
+	});
+
+	u32 shown = 0;
+	while (std::this_thread::sleep_for(std::chrono::milliseconds(5)), worker <= thread_state::aborting)
+	{
+		if (const u32 percent = static_cast<u32>(reader.get_progress(100)); percent != shown)
+		{
+			shown = percent;
+			publish(percent);
+		}
+	}
+	const bool ok = worker();
+	withdraw_system_progress(system_progress_source_package);
+
+	if (ok)
+	{
+		return IGNITION_PS3_INSTALL_PKG_OK;
+	}
+	return result.error == package_install_result::error_type::app_version
+		? IGNITION_PS3_INSTALL_PKG_APP_VERSION
+		: IGNITION_PS3_INSTALL_PKG_FAILED;
 }
 
 int32_t ignition_ps3_decrypt_module(const char* self_in, const char* elf_out)
