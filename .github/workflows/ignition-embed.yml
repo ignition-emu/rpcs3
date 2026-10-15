@@ -14,6 +14,12 @@ name: Ignition embed
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: The module to build
+        type: choice
+        options: [all, macos, linux, windows]
+        default: all
   push:
     # Path filters apply to branch pushes only; every ignition-v* tag builds.
     branches: ['**']
@@ -35,7 +41,7 @@ jobs:
     name: Ignition module (macOS arm64)
     # On a tag, ignition-release.yml builds macOS; building it here too was
     # the double build this workflow once had.
-    if: github.ref_type != 'tag'
+    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos')
     runs-on: macos-15
     env:
       CCACHE_DIR: /tmp/ccache_dir
@@ -72,6 +78,7 @@ jobs:
 
   linux-x86_64:
     name: Ignition module (Linux x86_64)
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -166,6 +173,7 @@ jobs:
 
   windows-x64:
     name: Ignition module (Windows x64)
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows'
     runs-on: windows-2025-vs2026
     permissions:
       contents: read
