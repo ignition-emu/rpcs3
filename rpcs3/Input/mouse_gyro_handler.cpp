@@ -1,10 +1,12 @@
 #include "stdafx.h"
 #include "mouse_gyro_handler.h"
 
+#ifndef __PROSPERO__
 #include <QEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QWindow>
+#endif
 
 #include <algorithm>
 
@@ -62,6 +64,7 @@ void mouse_gyro_handler::set_gyro_y(s32 steps)
 	m_gyro_y = static_cast<u16>(std::clamp(m_gyro_y + steps, 0, DEFAULT_MOTION_Y * 2 - 1));
 }
 
+#ifndef __PROSPERO__ // no mouse on the PS5
 void mouse_gyro_handler::handle_event(QEvent* ev, const QWindow& win)
 {
 	if (!m_enabled)
@@ -127,6 +130,7 @@ void mouse_gyro_handler::handle_event(QEvent* ev, const QWindow& win)
 	}
 	}
 }
+#endif
 
 void mouse_gyro_handler::apply_gyro(const std::shared_ptr<Pad>& pad)
 {

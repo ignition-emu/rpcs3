@@ -1,11 +1,13 @@
 #include "stdafx.h"
 #include "pad_thread.h"
 #include "product_info.h"
+#ifndef __PROSPERO__ // No HID in a PS5 title: Ignition passes the pads through its ABI.
 #include "ds3_pad_handler.h"
 #include "ds4_pad_handler.h"
 #include "dualsense_pad_handler.h"
 #include "skateboard_pad_handler.h"
 #include "ps_move_handler.h"
+#endif
 #ifdef _WIN32
 #include "xinput_pad_handler.h"
 #include "mm_joystick_handler.h"
@@ -862,6 +864,14 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 #else
 		return std::make_shared<keyboard_pad_handler>();
 #endif
+#ifdef __PROSPERO__
+	case pad_handler::ds3:
+	case pad_handler::ds4:
+	case pad_handler::dualsense:
+	case pad_handler::skateboard:
+	case pad_handler::move:
+		return std::make_shared<NullPadHandler>();
+#else
 	case pad_handler::ds3:
 		return std::make_shared<ds3_pad_handler>();
 	case pad_handler::ds4:
@@ -872,6 +882,7 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 		return std::make_shared<skateboard_pad_handler>();
 	case pad_handler::move:
 		return std::make_shared<ps_move_handler>();
+#endif
 #ifdef _WIN32
 	case pad_handler::xinput:
 		return std::make_shared<xinput_pad_handler>();
