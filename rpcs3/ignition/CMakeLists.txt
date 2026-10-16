@@ -1,5 +1,10 @@
 # The Ignition PS3 embed module: a Qt-free shared library over rpcs3_emu,
 
+if(PS5)
+	include(ps5_module.cmake)
+	return()
+endif()
+
 # Added from rpcs3/CMakeLists.txt, so it inherits that directory's compile
 # options; Qt6::Core and Gui are found here for AUTOMOC and the link.
 find_package(Qt6 COMPONENTS Core Gui REQUIRED)

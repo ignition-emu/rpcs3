@@ -26,6 +26,12 @@ if(USE_LTO)
     set_target_properties(rpcs3_emu PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
+if(PS5)
+    # Names exceptions that reach std::terminate (the only file built with exceptions)
+    target_sources(rpcs3_emu PRIVATE ../../Utilities/exception_info.cpp)
+    set_source_files_properties(../../Utilities/exception_info.cpp PROPERTIES COMPILE_OPTIONS "-fexceptions")
+endif()
+
 if(USE_ASAN)
     set_source_files_properties(../../Utilities/Thread.cpp PROPERTIES COMPILE_DEFINITIONS USE_ASAN)
 endif()
@@ -591,7 +597,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/Utils/rsx_utils.cpp
 )
 
-if(NOT ANDROID AND NOT APPLE)
+if(NOT ANDROID AND NOT APPLE AND NOT PS5)
     target_sources(rpcs3_emu PRIVATE
         RSX/GL/GLCommonDecompiler.cpp
         RSX/GL/GLCompute.cpp
@@ -735,4 +741,10 @@ endif()
 
 if(WAYLAND_FOUND)
     target_link_libraries(rpcs3_emu PRIVATE OpenGL::EGL)
+endif()
+
+if(PS5)
+    # cellL10n converts the PS3's character sets with iconv; the PS5 libc has none.
+    target_include_directories(rpcs3_emu PRIVATE ${Iconv_INCLUDE_DIR})
+    target_link_libraries(rpcs3_emu PRIVATE ${Iconv_LIBRARY})
 endif()

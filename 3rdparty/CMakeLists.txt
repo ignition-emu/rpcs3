@@ -51,7 +51,7 @@ else()
 endif()
 
 # libusb
-if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD")
+if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD" AND NOT PS5)
 	pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0>=1.0 )
 	cmake_dependent_option(USE_SYSTEM_LIBUSB "Use system libusb-1.0 as shared library" ON
 			"LIBUSB_FOUND" OFF)
@@ -60,7 +60,7 @@ else()
 	cmake_dependent_option(USE_SYSTEM_LIBUSB "Use system libusb-1.0 as shared library" OFF
 			"LIBUSB_FOUND" OFF)
 endif()
-if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD")
+if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD" AND NOT PS5)
 	# Always use system libusb as reference implementation isn't supported
 	add_library(usb-1.0-shared INTERFACE)
 	target_link_libraries(usb-1.0-shared INTERFACE PkgConfig::LIBUSB)
@@ -97,7 +97,7 @@ add_subdirectory(yaml-cpp)
 
 # OpenGL
 
-if (NOT ANDROID AND NOT APPLE)
+if (NOT ANDROID AND NOT APPLE AND NOT PS5)
 	find_package(OpenGL REQUIRED OPTIONAL_COMPONENTS EGL)
 
 	add_library(3rdparty_opengl INTERFACE)
@@ -182,13 +182,30 @@ if(USE_VULKAN)
 		endif()
 	endif()
 
+	if(PS5)
+		# The PS5 has no Vulkan loader: RADV (PS5_Vulkan) is linked into the title.
+		# Only the headers RADV was built with are needed here.
+		if(NOT RPCS3_VULKAN_HEADERS_DIR)
+			message(FATAL_ERROR "PS5: set RPCS3_VULKAN_HEADERS_DIR to the Vulkan headers RADV is built with")
+		endif()
+		# Commands go through volk, loaded from RADV's vk_icdGetInstanceProcAddr (as PS5_VulkanTemplate)
+		add_library(3rdparty_volk STATIC volk/volk.c)
+		target_include_directories(3rdparty_volk SYSTEM PUBLIC volk ${RPCS3_VULKAN_HEADERS_DIR})
+		target_compile_definitions(3rdparty_volk PUBLIC VK_NO_PROTOTYPES)
+
+		add_library(3rdparty_vulkan INTERFACE)
+		target_compile_definitions(3rdparty_vulkan INTERFACE -DHAVE_VULKAN)
+		target_include_directories(3rdparty_vulkan SYSTEM INTERFACE ${RPCS3_VULKAN_HEADERS_DIR})
+		target_link_libraries(3rdparty_vulkan INTERFACE 3rdparty_volk)
+		set(VULKAN_TARGET 3rdparty_vulkan)
+	else()
 	find_package(Vulkan)
 	if(VULKAN_FOUND)
 		add_library(3rdparty_vulkan INTERFACE)
 		target_compile_definitions(3rdparty_vulkan INTERFACE -DHAVE_VULKAN)
 		target_link_libraries(3rdparty_vulkan INTERFACE Vulkan::Vulkan)
 
-		if(UNIX AND NOT APPLE AND NOT ANDROID)
+		if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT PS5)
 			find_package(Wayland)
 			if (WAYLAND_FOUND)
 				target_include_directories(3rdparty_vulkan
@@ -202,6 +219,7 @@ if(USE_VULKAN)
 		if(APPLE)
 			message(FATAL_ERROR "To build without Vulkan support on macOS, please disable USE_VULKAN.")
 		endif()
+	endif()
 	endif()
 endif()
 
@@ -232,11 +250,15 @@ if(USE_SDL)
 endif()
 
 # OpenAL
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT PS5)
 	add_subdirectory(OpenAL EXCLUDE_FROM_ALL)
 else()
 	add_library(3rdparty_openal INTERFACE)
 	target_compile_definitions(3rdparty_openal INTERFACE WITHOUT_OPENAL=1)
+	if(PS5)
+		# cellMic.h includes alc.h for its types even without OpenAL: headers only.
+		target_include_directories(3rdparty_openal SYSTEM INTERFACE OpenAL/openal-soft/include/AL)
+	endif()
 endif()
 
 # FAudio
@@ -323,7 +345,7 @@ endif()
 
 # GLEW
 add_library(3rdparty_glew INTERFACE)
-if(NOT MSVC AND NOT ANDROID AND NOT APPLE)
+if(NOT MSVC AND NOT ANDROID AND NOT APPLE AND NOT PS5)
 	find_package(GLEW REQUIRED)
 	target_link_libraries(3rdparty_glew INTERFACE GLEW::GLEW)
 endif()

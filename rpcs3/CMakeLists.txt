@@ -10,7 +10,7 @@ include(CheckFunctionExists)
 
 set(CMAKE_CXX_STANDARD 23)
 
-if(UNIX AND NOT APPLE AND NOT ANDROID)
+if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT PS5)
     add_compile_definitions(DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/rpcs3")
     # Optionally enable X11 for window management
     find_package(X11)
@@ -23,7 +23,7 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
     endif()
 endif()
 
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT PS5)
     # Qt
     # finds Qt libraries and setups custom commands for MOC and UIC
     # Must be done here because generated MOC and UIC targets cant
@@ -34,7 +34,7 @@ endif()
 # subdirectories
 add_subdirectory(Emu)
 
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT PS5)
     add_subdirectory(rpcs3qt)
 endif()
 
@@ -46,7 +46,7 @@ endif()
 
 gen_git_version(${CMAKE_CURRENT_SOURCE_DIR})
 
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT PS5)
     # Build rpcs3_lib
     add_library(rpcs3_lib STATIC)
 

@@ -8,6 +8,11 @@ set(BUNDLE_SPEEX TRUE CACHE BOOL "Bundle the speex library")
 set(LAZY_LOAD_LIBS TRUE CACHE BOOL "Lazily load shared libraries")
 set(USE_SANITIZERS FALSE CACHE BOOL "Dont't use sanitizers")
 
+if(PS5)
+	# The PS5 has no OSS device; RPCS3 gets its own SceAudioOut backend.
+	set(HAVE_SYS_SOUNDCARD_H 0 CACHE INTERNAL "")
+endif()
+
 add_subdirectory(cubeb EXCLUDE_FROM_ALL)
 add_library(3rdparty::cubeb ALIAS cubeb)
 
