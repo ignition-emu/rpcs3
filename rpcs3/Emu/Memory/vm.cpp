@@ -28,7 +28,14 @@ namespace vm
 {
 	static u8* memory_reserve_4GiB(void* _addr, u64 size = 0x100000000, bool is_memory_mapping = false)
 	{
-		for (u64 addr = reinterpret_cast<u64>(_addr) + 0x100000000; addr < 0x8000'0000'0000; addr += 0x100000000)
+#ifdef __PROSPERO__
+		// RADV's GPU window is 0x2'0000'0000 - 0x2'FFFF'FFFF and the low ranges are small:
+		// guest memory starts at 64 GiB (measured: 16 GiB fits at a hint from there up to 512 GiB)
+		const u64 start = std::max<u64>(reinterpret_cast<u64>(_addr) + 0x100000000, 0x10'0000'0000);
+#else
+		const u64 start = reinterpret_cast<u64>(_addr) + 0x100000000;
+#endif
+		for (u64 addr = start; addr < 0x8000'0000'0000; addr += 0x100000000)
 		{
 			if (auto ptr = utils::memory_reserve(size, reinterpret_cast<void*>(addr), is_memory_mapping, false))
 			{
@@ -2312,7 +2319,9 @@ namespace vm
 
 	inline namespace ps3_
 	{
+#ifndef __PROSPERO__
 		static utils::shm s_hook{0x800000000, ""};
+#endif
 
 		void init()
 		{
@@ -2351,7 +2360,12 @@ namespace vm
 #ifdef _WIN32
 			utils::memory_release(g_hook_addr, 0x800000000);
 #endif
+#ifndef __PROSPERO__
 			ensure(s_hook.map(g_hook_addr, utils::protection::rw, true));
+#else
+			// A 32 GiB copy-on-write view of zeros has no direct-memory form; nothing reads the hook
+			// area (mihawk-99's port notes), so it stays a reservation
+#endif
 		}
 	}
 

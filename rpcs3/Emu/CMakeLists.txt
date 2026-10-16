@@ -71,6 +71,7 @@ target_sources(rpcs3_emu PRIVATE
     ../util/logs.cpp
     ../util/yaml.cpp
     ../util/vm_native.cpp
+    ../util/ps5_memory.cpp
     ../util/dyn_lib.cpp
     ../util/sysinfo.cpp
     ../util/cpu_stats.cpp

@@ -243,7 +243,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 	MemoryManager1(std::function<u64(const std::string&)> symbols_cement = {}) noexcept
 		: m_symbols_cement(std::move(symbols_cement))
 	{
-		auto ptr = reinterpret_cast<u8*>(utils::memory_reserve(c_max_size * 3, true));
+		auto ptr = ensure(reinterpret_cast<u8*>(utils::memory_reserve(c_max_size * 3, true)), "JIT memory manager: out of address space");
 		m_code_mems = ptr;
 		// ptr += c_max_size;
 		// m_data_ro_mems = ptr;
@@ -262,7 +262,14 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		// utils::memory_decommit(m_code_mems, how_much(code_ptr));
 		// utils::memory_decommit(m_data_ro_mems, how_much(data_ro_ptr));
 		// utils::memory_decommit(m_data_rw_mems, how_much(data_rw_ptr));
+#ifdef __PROSPERO__
+		// A PS5 title has less than 1 TiB of address space and no profiler to
+		// announce code to: a range kept for each compiler runs it out
+		// (mihawk-99's PS5_RPCS3).
+		utils::memory_release(m_code_mems, c_max_size * 3);
+#else
 		utils::memory_decommit(m_code_mems, c_max_size * 3, true);
+#endif
 	}
 
 	llvm::JITSymbol findSymbol(const std::string& name) override

@@ -46,6 +46,10 @@ static int memfd_create_(const char *name, uint flags)
 # endif
 #endif
 
+#ifdef __PROSPERO__
+#include "util/ps5_memory.h"
+#endif
+
 namespace utils
 {
 #ifdef MAP_NORESERVE
@@ -180,6 +184,9 @@ namespace utils
 
 	long get_page_size()
 	{
+#ifdef __PROSPERO__
+		return static_cast<long>(ps5::page_size);
+#endif
 		static const long r = []() -> long
 		{
 #ifdef _WIN32
@@ -237,6 +244,10 @@ namespace utils
 		}
 
 		return ::VirtualAlloc(use_addr, size, MEM_RESERVE, PAGE_NOACCESS);
+#elif defined(__PROSPERO__)
+		// Plain mmap is refused in a title, and anonymous mappings would draw on its small flexible
+		// budget: committed memory is direct memory in reserved ranges (util/ps5_memory.h).
+		return ps5::reserve(size, use_addr, use_addr != nullptr);
 #else
 		if (use_addr && reinterpret_cast<uptr>(use_addr) % 0x10000)
 		{
@@ -320,6 +331,8 @@ namespace utils
 
 #ifdef _WIN32
 		ensure(::VirtualAlloc(pointer, size, MEM_COMMIT, +prot));
+#elif defined(__PROSPERO__)
+		ensure(ps5::commit(pointer, size, +prot), "ps5::commit failed");
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 		ensure(::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot) != -1);
@@ -344,6 +357,8 @@ namespace utils
 
 #ifdef _WIN32
 		ensure(::VirtualFree(pointer, size, MEM_DECOMMIT));
+#elif defined(__PROSPERO__)
+		ensure(ps5::decommit(pointer, size), "ps5::decommit failed");
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 #if defined(__APPLE__) && defined(ARCH_ARM64)
@@ -378,6 +393,9 @@ namespace utils
 #ifdef _WIN32
 		memory_decommit(pointer, size);
 		memory_commit(pointer, size, prot);
+#elif defined(__PROSPERO__)
+		ensure(ps5::decommit(pointer, size), "ps5::decommit failed");
+		ensure(ps5::commit(pointer, size, +prot), "ps5::commit failed");
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 #if defined(__APPLE__) && defined(ARCH_ARM64)
@@ -416,6 +434,8 @@ namespace utils
 #ifdef _WIN32
 		unmap_mappping_memory(reinterpret_cast<u64>(pointer), size);
 		ensure(::VirtualFree(pointer, 0, MEM_RELEASE));
+#elif defined(__PROSPERO__)
+		ensure(ps5::release(pointer, size), "ps5::release failed");
 #else
 		ensure(::munmap(pointer, size) != -1);
 #endif
@@ -428,6 +448,10 @@ namespace utils
 			return;
 		}
 
+#ifdef __PROSPERO__
+		ensure(ps5::protect(pointer, size, +prot), "ps5::protect failed");
+		return;
+#endif
 #ifdef _WIN32
 
 		DWORD old;
@@ -462,6 +486,9 @@ namespace utils
 			return true;
 		}
 
+#ifdef __PROSPERO__
+		return true;
+#endif
 #ifdef _WIN32
 		return ::VirtualLock(pointer, size);
 #else
@@ -471,6 +498,9 @@ namespace utils
 
 	void* memory_map_fd([[maybe_unused]] native_handle fd, [[maybe_unused]] usz size, [[maybe_unused]] protection prot)
 	{
+#ifdef __PROSPERO__
+		return nullptr;
+#endif
 #ifdef _WIN32
 		// TODO
 		return nullptr;
@@ -490,6 +520,15 @@ namespace utils
 		: m_flags(flags)
 		, m_size(utils::align(size, 0x10000))
 	{
+#ifdef __PROSPERO__
+		// Guest memory is one direct-memory object, mapped by map()
+		ps5::object obj;
+		ensure(ps5::object_create(m_size, obj), "ps5::object_create failed");
+		m_direct_start = obj.start;
+		m_size = obj.size;
+		m_file = -1;
+		return;
+#endif
 #ifdef _WIN32
 		const ULARGE_INTEGER max_size{ .QuadPart = m_size };
 		m_handle = ensure(::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE, max_size.HighPart, max_size.LowPart, nullptr));
@@ -533,6 +572,15 @@ namespace utils
 	shm::shm(u64 size, const std::string& storage)
 		: m_size(utils::align(size, 0x10000))
 	{
+#ifdef __PROSPERO__
+		// No sparse file storage on the PS5: guest memory is one direct-memory object, mapped by map()
+		ps5::object obj;
+		ensure(ps5::object_create(m_size, obj), "ps5::object_create failed");
+		m_direct_start = obj.start;
+		m_size = obj.size;
+		m_file = -1;
+		return;
+#endif
 #ifdef _WIN32
 		fs::file f;
 
@@ -807,6 +855,12 @@ namespace utils
 
 #ifdef _WIN32
 		::CloseHandle(m_handle);
+#elif defined(__PROSPERO__)
+		if (m_direct_start >= 0)
+		{
+			ps5::object obj{m_direct_start, m_size};
+			ps5::object_destroy(obj);
+		}
 #else
 		::close(m_file);
 #endif
@@ -817,6 +871,15 @@ namespace utils
 
 	u8* shm::map(void* ptr, protection prot, bool cow) const
 	{
+#ifdef __PROSPERO__
+		// Copy-on-write views have no direct-memory form (only the 32 GiB hook area asked for one)
+		if (cow)
+		{
+			return nullptr;
+		}
+
+		return static_cast<u8*>(ps5::object_map({m_direct_start, m_size}, reinterpret_cast<void*>(reinterpret_cast<u64>(ptr) & -0x10000), +prot));
+#endif
 #ifdef _WIN32
 		DWORD access = FILE_MAP_WRITE;
 		switch (prot)
@@ -886,6 +949,25 @@ namespace utils
 
 	u8* shm::try_map(void* ptr, protection prot, bool cow) const
 	{
+#ifdef __PROSPERO__
+		{
+			const auto at = reinterpret_cast<u8*>(reinterpret_cast<u64>(ptr) & -0x10000);
+
+			if (!at || cow || !ps5::reserve(m_size, at, true))
+			{
+				return nullptr;
+			}
+
+			// Reserved just now: a fixed view replaces the reservation
+			if (auto result = this->map(at, prot, cow))
+			{
+				return result;
+			}
+
+			ps5::release(at, m_size);
+			return nullptr;
+		}
+#endif
 		// Non-null pointer shall be specified
 		const auto target = ensure(reinterpret_cast<u8*>(reinterpret_cast<u64>(ptr) & -0x10000));
 
@@ -1033,6 +1115,8 @@ namespace utils
 	{
 #ifdef _WIN32
 		::UnmapViewOfFile(ptr);
+#elif defined(__PROSPERO__)
+		ps5::object_unmap(ptr, m_size, false);
 #else
 		::munmap(ptr, m_size);
 #endif
@@ -1087,6 +1171,9 @@ namespace utils
 		{
 			return;
 		}
+#elif defined(__PROSPERO__)
+		// Give the view back as part of the surrounding reservation
+		ensure(ps5::object_unmap(target, m_size, true), "ps5::object_unmap failed");
 #else
 		// This method is faster but leaves mapped remnants of the shm (until overwritten)
 		ensure(::mprotect(target, m_size, PROT_NONE) != -1);
