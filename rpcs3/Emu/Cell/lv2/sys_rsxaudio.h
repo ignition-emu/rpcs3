@@ -1,5 +1,8 @@
 #pragma once
 
+#include <condition_variable>
+#include <mutex>
+
 #include "sys_sync.h"
 #include "sys_event.h"
 #include "Utilities/simple_ringbuf.h"
@@ -261,6 +264,13 @@ private:
 	int cancel_event{};
 	int timer_handle{};
 	int epoll_fd{};
+#elif defined(__PROSPERO__)
+	// The PS5 kernel's kqueue never delivers the EVFILT_USER cancel: a deadline and a flag
+	// behind a condition variable stand in for the timer and the cancel event
+	std::mutex tmr_mutex;
+	std::condition_variable tmr_cv;
+	u64 tmr_deadline = 0; // get_system_time() microseconds; 0 = disarmed
+	bool tmr_canceled = false;
 #elif defined(BSD) || defined(__APPLE__)
 	static constexpr u64 TIMER_ID = 0;
 	static constexpr u64 CANCEL_ID = 1;

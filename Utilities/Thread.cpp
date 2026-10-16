@@ -1548,6 +1548,10 @@ namespace rsx
 	extern std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
 }
 
+#ifdef __PROSPERO__
+extern "C" int sceKernelQueryMemoryProtection(void* address, void** start, void** end, u32* protection);
+#endif
+
 bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t* context) noexcept
 {
 	g_tls_fault_all++;
@@ -1610,6 +1614,31 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 #if defined(ARCH_X64)
 	const u8* const code = reinterpret_cast<u8*>(RIP(context));
 
+#ifdef __PROSPERO__
+	// The title's own code and the system modules are execute-only on the PS5: reading the
+	// faulting instruction there faults again and kills the process. Only JIT code is readable.
+	// The decoded instruction is needed only to emulate RawSPU MMIO below; any other fault
+	// (such as a write to memory the texture cache protects) goes on to the generic handling.
+	bool code_readable = true;
+	{
+		void* start = nullptr;
+		void* end = nullptr;
+		u32 prot = 0;
+		if (::sceKernelQueryMemoryProtection(const_cast<u8*>(code), &start, &end, &prot) != 0 || !(prot & 0x1))
+		{
+			code_readable = false;
+		}
+	}
+
+	if (!code_readable && addr - RAW_SPU_BASE_ADDR < (6 * RAW_SPU_OFFSET) && (addr % RAW_SPU_OFFSET) >= RAW_SPU_PROB_OFFSET)
+	{
+		sig_log.error("RawSPU MMIO access at 0x%x from execute-only code at %p: cannot decode the instruction", addr, code);
+		return false;
+	}
+
+	if (code_readable)
+#endif
+	{
 	x64_op_t op;
 	x64_reg_t reg;
 	usz d_size;
@@ -1834,6 +1863,7 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		g_tls_fault_spu++;
 		return true;
 	} while (0);
+	}
 #elif defined(ARCH_ARM64)
 	const u8* const code = reinterpret_cast<u8*>(RIP(context));
 
@@ -2609,6 +2639,15 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 
 	std::string msg = fmt::format("Segfault %s location %p at %p.\n", cause, info->si_addr, RIP(context));
 
+#ifdef __PROSPERO__
+	{
+		// No debugger on the console: klogsrv shows the kernel's backtrace of the fault, and the
+		// anchor's link address maps it to the image (the load base)
+		const uptr anchor = reinterpret_cast<uptr>(&signal_handler);
+		fmt::append(msg, "PS5 context: rip=%p rsp=%p rbp=%p anchor(signal_handler)=%p\n", RIP(context), RSP(context), *X64REG(context, 5), anchor);
+	}
+#endif
+
 	if (vm::try_get_addr(info->si_addr).second)
 	{
 		fmt::append(msg, "Sudo Addr: %p, VM Addr: %p\n", vm::g_sudo_addr, vm::g_base_addr);
@@ -2726,6 +2765,11 @@ const bool s_exception_handler_set = []() -> bool
 
 #endif
 
+#ifdef __PROSPERO__
+std::string describe_current_exception();
+std::string describe_current_stack();
+#endif
+
 const bool s_terminate_handler_set = []() -> bool
 {
 	std::set_terminate([]()
@@ -2736,7 +2780,16 @@ const bool s_terminate_handler_set = []() -> bool
 			utils::trap();
 		}
 
-		report_fatal_error("RPCS3 has abnormally terminated.");
+#ifdef __PROSPERO__
+		// Name the exception that reached std::terminate, when there is one
+		std::string reason = describe_current_exception();
+		if (!reason.empty()) reason.insert(0, "\n");
+		reason += "\n" + describe_current_stack();
+#else
+		const std::string reason;
+#endif
+
+		report_fatal_error("RPCS3 has abnormally terminated." + reason);
 	});
 
 	return true;

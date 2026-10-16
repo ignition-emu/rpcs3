@@ -21,6 +21,13 @@
 #include <os/os_sync_wait_on_address.h>
 #endif
 
+#ifdef __PROSPERO__
+// PS5: FreeBSD's _umtx_op is the console's futex (libkernel's own threads are built on it)
+#include <sys/types.h>
+#include <sys/umtx.h>
+#include <ctime>
+#endif
+
 #ifdef _WIN32
 DYNAMIC_IMPORT("ntdll.dll", NtWaitForKeyedEvent, NTSTATUS(HANDLE, PVOID Key, BOOLEAN Alertable, PLARGE_INTEGER Timeout));
 DYNAMIC_IMPORT("ntdll.dll", NtReleaseKeyedEvent, NTSTATUS(HANDLE, PVOID Key, BOOLEAN Alertable, PLARGE_INTEGER Timeout));
@@ -76,7 +83,32 @@ enum
 
 inline int futex(volatile void* uaddr, int futex_op, uint val, const timespec* timeout = nullptr, [[maybe_unused]] uint mask = 0)
 {
-#ifdef __linux__
+#ifdef __PROSPERO__
+	// Wait while *uaddr == val (a timeout is relative), wake up to val waiters; the bitset forms
+	// wait for any wake and wake everyone (spurious wakeups are allowed by every caller)
+	switch (futex_op)
+	{
+	case FUTEX_WAIT_PRIVATE:
+	case FUTEX_WAIT_BITSET_PRIVATE:
+	{
+		if (timeout)
+		{
+			_umtx_time ut{};
+			ut._timeout = *timeout;
+			ut._flags = 0;
+			ut._clockid = CLOCK_MONOTONIC;
+			return _umtx_op(const_cast<void*>(uaddr), UMTX_OP_WAIT_UINT_PRIVATE, val, reinterpret_cast<void*>(sizeof(ut)), &ut);
+		}
+		return _umtx_op(const_cast<void*>(uaddr), UMTX_OP_WAIT_UINT_PRIVATE, val, nullptr, nullptr);
+	}
+	case FUTEX_WAKE_PRIVATE:
+		return _umtx_op(const_cast<void*>(uaddr), UMTX_OP_WAKE_PRIVATE, val, nullptr, nullptr);
+	case FUTEX_WAKE_BITSET_PRIVATE:
+		return _umtx_op(const_cast<void*>(uaddr), UMTX_OP_WAKE_PRIVATE, INT32_MAX, nullptr, nullptr);
+	}
+	errno = EINVAL;
+	return -1;
+#elif defined(__linux__)
 	return syscall(SYS_futex, uaddr, futex_op, static_cast<int>(val), timeout, nullptr, static_cast<int>(mask));
 #elif __APPLE__
 	switch (futex_op)

@@ -6,7 +6,9 @@
 const bool utils::g_atomic_lse2 = utils::has_lse2();
 #endif
 
-#if defined(__linux__) || defined(__APPLE__)
+// PS5: the futex is _umtx_op (Utilities/sync.h). The std::mutex fallback aborted: a notifier locked
+// a cond handle's mutex as its waiter destroyed it, and the console's lock failed (WWE 12, run 3)
+#if defined(__linux__) || defined(__APPLE__) || defined(__PROSPERO__)
 #define USE_FUTEX
 #elif !defined(_WIN32)
 #define USE_STD

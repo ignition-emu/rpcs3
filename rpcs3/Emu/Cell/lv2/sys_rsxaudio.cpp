@@ -2016,6 +2016,12 @@ void rsxaudio_periodic_tmr::sched_timer()
 	const long nsecs = (interval - secs * 1'000'000) * 1000;
 	const itimerspec tspec = {{}, { secs, nsecs }};
 	ensure(timerfd_settime(timer_handle, 0, &tspec, nullptr) == 0);
+#elif defined(__PROSPERO__)
+	{
+		std::lock_guard lock(tmr_mutex);
+		tmr_deadline = interval ? get_system_time() + interval : 0;
+	}
+	tmr_cv.notify_all();
 #elif defined(BSD) || defined(__APPLE__)
 	handle[TIMER_ID].data = interval * 1000;
 	if (interval)
@@ -2051,6 +2057,16 @@ void rsxaudio_periodic_tmr::cancel_timer_unlocked()
 		const auto wr_res = write(cancel_event, &flag, sizeof(flag));
 		ensure(wr_res == sizeof(flag) || errno == EAGAIN);
 	}
+#elif defined(__PROSPERO__)
+	{
+		std::lock_guard lock(tmr_mutex);
+		tmr_deadline = 0;
+		if (in_wait)
+		{
+			tmr_canceled = true;
+		}
+	}
+	tmr_cv.notify_all();
 #elif defined(BSD) || defined(__APPLE__)
 	handle[TIMER_ID].flags = (handle[TIMER_ID].flags & ~EV_ENABLE) | EV_DISABLE;
 	handle[TIMER_ID].data = 0;
@@ -2074,6 +2090,9 @@ void rsxaudio_periodic_tmr::reset_cancel_flag()
 #elif defined(__linux__)
 	u64 tmp_buf{};
 	[[maybe_unused]] const auto nread = read(cancel_event, &tmp_buf, sizeof(tmp_buf));
+#elif defined(__PROSPERO__)
+	std::lock_guard lock(tmr_mutex);
+	tmr_canceled = false;
 #elif defined(BSD) || defined(__APPLE__)
 	// Cancel event is reset automatically
 #else
@@ -2095,6 +2114,8 @@ rsxaudio_periodic_tmr::rsxaudio_periodic_tmr()
 	cancel_event = eventfd(0, EFD_NONBLOCK);
 	evnt.data.fd = cancel_event;
 	ensure(cancel_event >= 0 && epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cancel_event, &evnt) == 0);
+#elif defined(__PROSPERO__)
+	// Nothing to create
 #elif defined(BSD) || defined(__APPLE__)
 
 #if defined(__APPLE__)
@@ -2122,6 +2143,8 @@ rsxaudio_periodic_tmr::~rsxaudio_periodic_tmr()
 	close(epoll_fd);
 	close(timer_handle);
 	close(cancel_event);
+#elif defined(__PROSPERO__)
+	// Nothing to close
 #elif defined(BSD) || defined(__APPLE__)
 	close(kq);
 #else
@@ -2191,6 +2214,35 @@ rsxaudio_periodic_tmr::wait_result rsxaudio_periodic_tmr::wait(const std::functi
 					wait_canceled = true;
 					break;
 				}
+			}
+		}
+#elif defined(__PROSPERO__)
+		{
+			std::unique_lock tmr_lock(tmr_mutex);
+
+			while (true)
+			{
+				if (tmr_canceled)
+				{
+					wait_canceled = true;
+					break;
+				}
+
+				if (!tmr_deadline)
+				{
+					tmr_cv.wait(tmr_lock);
+					continue;
+				}
+
+				const u64 now = get_system_time();
+				if (now >= tmr_deadline)
+				{
+					// One shot, as the other platforms' timers
+					tmr_deadline = 0;
+					break;
+				}
+
+				tmr_cv.wait_for(tmr_lock, std::chrono::microseconds(tmr_deadline - now));
 			}
 		}
 #elif defined(BSD) || defined(__APPLE__)
