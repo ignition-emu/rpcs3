@@ -1,4 +1,11 @@
 #define VMA_IMPLEMENTATION
+
+#ifdef __PROSPERO__
+// volk's entry points (loaded before any allocator is made) stand in for the prototypes
+#include "VulkanAPI.h"
+#define VMA_STATIC_VULKAN_FUNCTIONS 1
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#endif
 #define VMA_VULKAN_VERSION 1002000
 
 #include "util/atomic.hpp"

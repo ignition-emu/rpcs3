@@ -21,7 +21,12 @@
 #pragma warning( disable : 4005 )
 #endif
 
+#ifdef __PROSPERO__
+// The PS5 title links RADV with no loader: commands go through volk.
+#include <volk.h>
+#else
 #include <vulkan/vulkan.h>
+#endif
 
 #ifdef _MSC_VER
 #pragma warning(pop)

@@ -15,6 +15,13 @@ using Window  = unsigned long;
 #include <wayland-client.h>
 #endif
 
+#ifdef __PROSPERO__
+// No window system: frames are presented offscreen only.
+struct ps5_display_t
+{
+};
+#endif
+
 #ifdef _WIN32
 using display_handle_t = HWND;
 #elif defined(__APPLE__)
@@ -30,6 +37,8 @@ using display_handle_t = std::variant<
 	std::pair<wl_display*, wl_surface*>
 #elif defined(ANDROID)
 	struct ANativeWindow*
+#elif defined(__PROSPERO__)
+	struct ps5_display_t
 #endif
 >;
 #endif

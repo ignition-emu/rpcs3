@@ -3,6 +3,11 @@
 
 #include "Emu/system_config.h"
 
+#ifdef __PROSPERO__
+// RADV's entry point in the PS5 title, which links RADV in place of a loader.
+extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(VkInstance instance, const char* name);
+#endif
+
 namespace vk
 {
 	// Supported extensions
@@ -89,6 +94,12 @@ namespace vk
 #endif
 	bool instance::create(const char* app_name, bool fast)
 	{
+#ifdef __PROSPERO__
+		// volk's commands come from the title's RADV, once for the process.
+		static const bool s_volk = (volkInitializeCustom(vk_icdGetInstanceProcAddr), true);
+		ensure(s_volk);
+#endif
+
 		// Initialize a vulkan instance
 		VkApplicationInfo app = {};
 
@@ -181,6 +192,10 @@ namespace vk
 				found_surface_ext = true;
 			}
 #endif
+#ifdef __PROSPERO__
+			// Frames are only ever presented offscreen (g_offscreen_present).
+			found_surface_ext = true;
+#endif
 			if (!found_surface_ext)
 			{
 				rsx_log.error("Could not find a supported Vulkan surface extension");
@@ -226,6 +241,10 @@ namespace vk
 
 			return false;
 		}
+
+#ifdef __PROSPERO__
+		volkLoadInstance(m_instance);
+#endif
 
 		return true;
 	}
