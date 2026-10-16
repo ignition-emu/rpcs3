@@ -89,11 +89,43 @@
 #undef DestroyAll
 #endif
 
+#ifdef __PROSPERO__
+#include "Emu/RSX/Overlays/overlay_utils.h"
+#include <unordered_map>
+
+namespace
+{
+	// RPCS3's English on-screen text with no Qt: localized_strings.py writes
+	// the table from rpcs3qt/localized_emu.h when the build is configured.
+	std::string localized_text(localized_string_id id, const char* args)
+	{
+		static const std::unordered_map<localized_string_id, std::string_view> s_strings =
+		{
+#include "ignition_localized_strings.inc"
+		};
+
+		const auto found = s_strings.find(id);
+		if (found == s_strings.end())
+		{
+			return {};
+		}
+
+		std::string text(found->second);
+		const std::string_view arg = args ? args : "";
+		for (usz at = text.find("%0"); at != umax; at = text.find("%0", at + arg.size()))
+		{
+			text.replace(at, 2, arg);
+		}
+		return text;
+	}
+}
+#else
 // Last: pulls <QObject>, whose keyword macros mangle the emu headers if it lands
 // before them. Only make_callbacks below needs it.
 #include "rpcs3qt/localized_emu.h"
 #ifndef __APPLE__
 #include <QStandardPaths>
+#endif
 #endif
 
 // rpcs3_emu calls this and leaves the frontend to define it. The GUI logs it to
@@ -559,8 +591,13 @@ static emu_callbacks make_callbacks(ignition_ps3* self)
 	// path stubs them, but we surface the native overlays, so feed the real
 	// strings like gui_application does. get_localized_setting is settings-dialog
 	// only, which the embed never shows.
+#ifdef __PROSPERO__
+	cb.get_localized_string    = [](localized_string_id id, const char* args) -> std::string { return localized_text(id, args); };
+	cb.get_localized_u32string = [](localized_string_id id, const char* args) -> std::u32string { return utf8_to_u32string(localized_text(id, args)); };
+#else
 	cb.get_localized_string    = [](localized_string_id id, const char* args) -> std::string { return localized_emu::get_string(id, args); };
 	cb.get_localized_u32string = [](localized_string_id id, const char* args) -> std::u32string { return localized_emu::get_u32string(id, args); };
+#endif
 	cb.get_localized_setting   = [](const cfg::_base*, u32) -> std::string { return {}; };
 
 	cb.play_sound    = [](const std::string&, std::optional<f32>) {};
@@ -623,7 +660,10 @@ static emu_callbacks make_callbacks(ignition_ps3* self)
 	// glyphs to draw: on macOS queried from the OS (ignition_macos_font_dirs),
 	// elsewhere from QtCore itself, as main_application does.
 	cb.get_font_dirs     = []() -> std::vector<std::string> {
-#ifndef __APPLE__
+#if defined(__PROSPERO__)
+		// No font folders in a PS5 title: overlays draw with the firmware's fonts.
+		return {};
+#elif !defined(__APPLE__)
 		std::vector<std::string> font_dirs;
 		for (const QString& location : QStandardPaths::standardLocations(QStandardPaths::FontsLocation))
 		{
