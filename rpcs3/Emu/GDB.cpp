@@ -123,6 +123,11 @@ void gdb_thread::start_server()
 
 	auto sname = g_cfg.misc.gdb_server.to_string();
 
+#ifdef __PROSPERO__
+	// No debugger reaches a PS5 title: never open the socket
+	sname.clear();
+#endif
+
 	if (sname[0] == '\0')
 	{
 		// Empty string or starts with null: GDB server disabled

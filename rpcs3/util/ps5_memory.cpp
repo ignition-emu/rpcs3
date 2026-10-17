@@ -71,6 +71,14 @@ namespace utils::ps5
 			return base < gpu_window_end && base + size > gpu_window_begin;
 		}
 
+		// Where the kernel may have moved a hint: out of the GPU window, out of
+		// RADV's region and away from the system modules (from 0x8_0000_0000),
+		// near which direct memory cannot be mapped (kamb205/KB-RPCS3, patch 0018).
+		bool placeable(u64 base, usz size)
+		{
+			return !in_gpu_window(base, size) && (base + size <= 0x8'0000'0000 || (base >= 0x10'0000'0000 && base + size <= anywhere_end));
+		}
+
 		// Exactly at `address`: the kernel moves a hint whose space is taken,
 		// so a range placed elsewhere is given back.
 		void* reserve_at(void* address, usz size)
@@ -123,7 +131,7 @@ namespace utils::ps5
 			void* base = address;
 			if (sceKernelReserveVirtualRange(&base, size, 0, unit_size) == 0)
 			{
-				if (!in_gpu_window(reinterpret_cast<u64>(base), size))
+				if (placeable(reinterpret_cast<u64>(base), size))
 				{
 					return base;
 				}
@@ -151,7 +159,7 @@ namespace utils::ps5
 			void* base = reinterpret_cast<void*>(hint);
 			if (sceKernelReserveVirtualRange(&base, size, 0, unit_size) == 0)
 			{
-				if (!in_gpu_window(reinterpret_cast<u64>(base), size))
+				if (reinterpret_cast<u64>(base) >= anywhere_begin && reinterpret_cast<u64>(base) + size <= anywhere_end)
 				{
 					return base;
 				}

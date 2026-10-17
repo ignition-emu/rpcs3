@@ -847,6 +847,12 @@ namespace vk
 			vk::die_with_error(error);
 		}
 
+#ifdef __PROSPERO__
+		// volk calls this device's commands directly, not through the instance's
+		// dispatch (kamb205/KB-RPCS3, patch 0002).
+		volkLoadDevice(dev);
+#endif
+
 		// Dump some diagnostics to the log
 		rsx_log.notice("%u extensions loaded:", ::size32(requested_extensions));
 		for (const auto& ext : requested_extensions)
