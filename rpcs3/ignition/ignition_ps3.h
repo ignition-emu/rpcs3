@@ -173,6 +173,40 @@ IGNITION_PS3_API size_t ignition_ps3_read_audio(ignition_ps3*, int16_t* dst, siz
 // The core's declared audio rate, once known (0 before boot completes).
 IGNITION_PS3_API uint32_t ignition_ps3_audio_rate(const ignition_ps3*);
 
+// --- measurement -----------------------------------------------------------
+
+// Counts since the instance was created, which the host subtracts over a
+// window. Each thread group's CPU time is summed from RPCS3's own per-thread
+// counters, which its performance overlay also reads: with that overlay
+// showing, the two share the time between them.
+typedef struct ignition_ps3_stats {
+    uint32_t size;              // in: the caller's sizeof; the module fills no more
+    uint32_t ppu_threads;       // PPU threads alive when the call ran
+    uint32_t spu_threads;
+    uint32_t reserved;
+    uint64_t frames_presented;  // frames the RSX handed to the host
+    uint64_t frames_replaced;   // of those, ones the next replaced before a take
+    uint64_t intervals_dropped; // present intervals past the buffer's capacity
+    uint64_t ppu_cpu_ns;        // CPU time of the PPU threads, summed
+    uint64_t spu_cpu_ns;
+    uint64_t rsx_cpu_ns;
+    uint64_t process_cpu_ns;    // the whole process's, user and system
+    uint64_t audio_frames_shed; // stereo frames the audio ring shed past its cap
+} ignition_ps3_stats;
+
+// Fills `out` up to out->size bytes. Returns 1, or 0 for a null argument.
+// Call from the thread that calls pump().
+IGNITION_PS3_API int32_t ignition_ps3_stats_of(ignition_ps3*, ignition_ps3_stats* out);
+
+// Copies the times between presented frames, in microseconds and oldest first,
+// recorded since the last call, up to `max`, and forgets those. Returns how many
+// it copied. The module holds 4096; later ones count as intervals_dropped.
+//
+// Both are optional within ABI 4: modules after ignition-v0.1.7 export them,
+// earlier ones do not, so a host resolves them by name and measures nothing
+// without them.
+IGNITION_PS3_API size_t ignition_ps3_take_frame_intervals(ignition_ps3*, uint32_t* out_us, size_t max);
+
 // --- state -----------------------------------------------------------------
 
 // RPCS3 states are stop-serialize-reboot, not a step; both block. Zero on
