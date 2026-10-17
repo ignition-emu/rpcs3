@@ -8,7 +8,7 @@
 #include <atomic>
 #include <cstring>
 #include <map>
-#include <mutex>
+#include <pthread.h>
 
 extern "C"
 {
@@ -38,10 +38,22 @@ namespace utils::ps5
 		constexpr u64 anywhere_begin = 0x40'0000'0000;
 		constexpr u64 anywhere_end = 0x80'0000'0000;
 
-		std::mutex g_mutex;
+		// Statically initialized and never destroyed: RPCS3's static initializers
+		// commit memory, and can run before this file's.
+		pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 		// The direct memory behind each committed unit, by the unit's address.
-		std::map<u64, s64> g_backed;
+		std::map<u64, s64>& backed()
+		{
+			static auto& s_backed = *new std::map<u64, s64>;
+			return s_backed;
+		}
+
+		struct lock_guard
+		{
+			lock_guard() { pthread_mutex_lock(&g_mutex); }
+			~lock_guard() { pthread_mutex_unlock(&g_mutex); }
+		};
 
 		u64 floor_page(u64 address)
 		{
@@ -155,17 +167,17 @@ namespace utils::ps5
 		size = utils::align<usz>(size, unit_size);
 		const u64 begin = reinterpret_cast<u64>(base);
 
-		std::lock_guard lock(g_mutex);
+		lock_guard lock;
 
 		if (sceKernelMunmap(base, size) != 0)
 		{
 			return false;
 		}
 
-		for (auto it = g_backed.lower_bound(begin); it != g_backed.end() && it->first < begin + size;)
+		for (auto it = backed().lower_bound(begin); it != backed().end() && it->first < begin + size;)
 		{
 			sceKernelReleaseDirectMemory(it->second, unit_size);
-			it = g_backed.erase(it);
+			it = backed().erase(it);
 		}
 
 		return true;
@@ -181,11 +193,11 @@ namespace utils::ps5
 		const u64 begin = reinterpret_cast<u64>(address);
 		const u64 end = begin + size;
 
-		std::lock_guard lock(g_mutex);
+		lock_guard lock;
 
 		for (u64 unit = begin & ~(unit_size - 1); unit < end; unit += unit_size)
 		{
-			if (g_backed.contains(unit))
+			if (backed().contains(unit))
 			{
 				continue;
 			}
@@ -204,7 +216,7 @@ namespace utils::ps5
 			}
 
 			std::memset(reinterpret_cast<void*>(unit), 0, unit_size);
-			g_backed.emplace(unit, start);
+			backed().emplace(unit, start);
 
 			// What the unit backs beyond the range stays inaccessible, as reserved space.
 			sceKernelMprotect(reinterpret_cast<void*>(unit), unit_size, 0);
@@ -223,13 +235,13 @@ namespace utils::ps5
 		const u64 begin = reinterpret_cast<u64>(address);
 		const u64 end = begin + size;
 
-		std::lock_guard lock(g_mutex);
+		lock_guard lock;
 
 		for (u64 unit = begin & ~(unit_size - 1); unit < end; unit += unit_size)
 		{
-			const auto found = g_backed.find(unit);
+			const auto found = backed().find(unit);
 
-			if (found == g_backed.end())
+			if (found == backed().end())
 			{
 				continue;
 			}
@@ -238,7 +250,7 @@ namespace utils::ps5
 			{
 				sceKernelMunmap(reinterpret_cast<void*>(unit), unit_size);
 				sceKernelReleaseDirectMemory(found->second, unit_size);
-				g_backed.erase(found);
+				backed().erase(found);
 
 				if (!reserve_at(reinterpret_cast<void*>(unit), unit_size))
 				{
