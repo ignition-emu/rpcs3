@@ -202,7 +202,7 @@ typedef struct ignition_ps3_stats {
     uint32_t size;              // in: the caller's sizeof; the module fills no more
     uint32_t ppu_threads;       // PPU threads alive when the call ran
     uint32_t spu_threads;
-    uint32_t reserved;
+    uint32_t gpu_slot_frames;   // frames the renderer's GPU wrote into a slot
     uint64_t frames_presented;  // frames the RSX handed to the host
     uint64_t frames_replaced;   // of those, ones the next replaced before a take
     uint64_t intervals_dropped; // present intervals past the buffer's capacity
