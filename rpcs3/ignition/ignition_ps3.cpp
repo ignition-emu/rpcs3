@@ -52,6 +52,7 @@
 #include "Loader/PUP.h"
 #include "Loader/TAR.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 
 #include <chrono>
@@ -553,9 +554,27 @@ public:
 // where the overlay path needs a real value (fonts, localized text, video source)
 // we provide one instead of headless's null. Every field is assigned; an unset
 // std::function would crash on first call.
+namespace
+{
+	std::string config_layer_yaml(config_layer layer);
+	void make_player_configs_sparse();
+}
+
 static emu_callbacks make_callbacks(ignition_ps3* self)
 {
 	emu_callbacks cb{};
+
+	// The host's settings, layered into each boot's configuration. The first
+	// boot after an update first turns the player's files into their own
+	// settings only, which the layers go between.
+	cb.get_config_layer = [](config_layer layer)
+	{
+		if (layer == config_layer::under_global)
+		{
+			make_player_configs_sparse();
+		}
+		return config_layer_yaml(layer);
+	};
 
 	cb.call_from_main_thread = [self](std::function<void()> func, atomic_t<u32>* wake_up)
 	{
@@ -844,25 +863,172 @@ namespace
 		}
 	}
 
-	// The global layer the settings dialog edits for "all games": clone(defaults)
-	// += config.yml. Mirrors emu_settings::LoadSettings with an empty title_id
-	// (LoadSettings lines 108-140) -- never the running g_cfg, which may carry this
-	// title's per-title overrides.
+	YAML::Node yaml_node_at(YAML::Node node, std::string_view path);
+
+	// The host's layers (ignition_ps3_set_config_layers), as YAML trees, by
+	// config_layer. Set before a boot and read on the emulator's thread.
+	std::mutex g_config_layers_mtx;
+	std::array<std::string, 3> g_config_layers;
+
+	std::string config_layer_yaml(config_layer layer)
+	{
+		std::lock_guard lock(g_config_layers_mtx);
+		return g_config_layers[static_cast<size_t>(layer)];
+	}
+
+	YAML::Node yaml_map_or_empty(const std::string& text)
+	{
+		auto [node, error] = yaml_load(text);
+		return error.empty() && node.IsMap() ? node : YAML::Node(YAML::NodeType::Map);
+	}
+
+	YAML::Node yaml_file_or_empty(const std::string& path)
+	{
+		const fs::file file{path};
+		return yaml_map_or_empty(file ? file.to_string() : std::string{});
+	}
+
+	std::string yaml_text(const YAML::Node& node)
+	{
+		YAML::Emitter out;
+		emit_data(out, node);
+		return out.c_str();
+	}
+
+	std::string global_config_path()
+	{
+		return fs::get_config_dir(true) + "config.yml";
+	}
+
+	// The player's own settings for all games: config.yml, which holds only
+	// what the player set.
+	YAML::Node player_global_layer()
+	{
+		return yaml_file_or_empty(global_config_path());
+	}
+
+	// The player's own settings for one title: its custom config, which holds
+	// only what the player set for it.
+	YAML::Node player_game_layer(const std::string& title_id)
+	{
+		return title_id.empty() ? YAML::Node(YAML::NodeType::Map) : yaml_file_or_empty(rpcs3::utils::get_custom_config_path(title_id));
+	}
+
+	// What every game starts from, the layer the settings dialog shows for
+	// "all games": the defaults, the host's settings below the global config,
+	// and config.yml. Never the running g_cfg, which may carry this title's.
 	YAML::Node build_global_layer()
 	{
 		auto [defaults, default_error] = yaml_load(g_cfg_defaults);
 		YAML::Node current = default_error.empty() ? YAML::Clone(defaults) : YAML::Node(YAML::NodeType::Map);
+		current += yaml_map_or_empty(config_layer_yaml(config_layer::under_global));
+		current += player_global_layer();
+		return current;
+	}
 
-		const std::string global_config_path = fs::get_config_dir(true) + "config.yml";
-		if (fs::file config{global_config_path, fs::read + fs::create})
+	// The running title's configuration as a boot builds it, the same order
+	// as Emulator::Load: the global layer, the host's settings for the game,
+	// the player's custom config, and the host's settings over both.
+	std::string boot_config()
+	{
+		YAML::Node current = build_global_layer();
+		current += yaml_map_or_empty(config_layer_yaml(config_layer::under_game));
+		current += player_game_layer(Emu.GetTitleID());
+		current += yaml_map_or_empty(config_layer_yaml(config_layer::over_game));
+		return yaml_text(current);
+	}
+
+	// The leaves of `from` that `base` lacks or holds another value for.
+	YAML::Node yaml_difference(const YAML::Node& from, const YAML::Node& base)
+	{
+		YAML::Node out(YAML::NodeType::Map);
+		if (!from || !from.IsMap())
 		{
-			auto [global_config, global_error] = yaml_load(config.to_string());
-			if (global_error.empty())
+			return out;
+		}
+		for (const auto& pair : from)
+		{
+			if (!pair.first.IsScalar())
 			{
-				current += global_config;
+				continue;
+			}
+			const std::string key = pair.first.Scalar();
+			const YAML::Node other = base && base.IsMap() ? base[key] : YAML::Node();
+			if (pair.second.IsMap())
+			{
+				if (const YAML::Node inner = yaml_difference(pair.second, other); inner.size())
+				{
+					out[key] = inner;
+				}
+			}
+			else if (!other || YAML::Dump(pair.second) != YAML::Dump(other))
+			{
+				out[key] = pair.second;
 			}
 		}
-		return current;
+		return out;
+	}
+
+	// Once: config.yml and each custom config, which held the whole tree,
+	// become only what differs from the layer below them (ignition-ps5,
+	// docs/per-model-settings.md).
+	void make_player_configs_sparse()
+	{
+		const std::string marker = fs::get_config_dir(true) + "ignition-sparse-configs";
+		if (fs::is_file(marker))
+		{
+			return;
+		}
+		auto [defaults, error] = yaml_load(g_cfg_defaults);
+		if (!error.empty())
+		{
+			return;
+		}
+		const YAML::Node global = yaml_difference(player_global_layer(), defaults);
+		if (fs::is_file(global_config_path()))
+		{
+			fs::write_file(global_config_path(), fs::rewrite, yaml_text(global));
+		}
+		YAML::Node below_games = YAML::Clone(defaults);
+		below_games += global;
+		const std::string custom_dir = rpcs3::utils::get_custom_config_dir();
+		for (const auto& entry : fs::dir(custom_dir))
+		{
+			if (entry.is_directory || !entry.name.ends_with(".yml"))
+			{
+				continue;
+			}
+			const std::string path = custom_dir + entry.name;
+			fs::write_file(path, fs::rewrite, yaml_text(yaml_difference(yaml_file_or_empty(path), below_games)));
+		}
+		fs::write_file(marker, fs::rewrite, std::string("config.yml and custom configs hold only the player's settings\n"));
+	}
+
+	// '/'-joined setting paths to values, as JSON or YAML, as the nested tree
+	// g_cfg reads. False when it does not parse as a map of values.
+	bool config_paths_to_yaml(const char* paths, std::string& out)
+	{
+		out.clear();
+		if (!paths || !*paths)
+		{
+			return true;
+		}
+		auto [flat, error] = yaml_load(paths);
+		if (!error.empty() || !flat.IsMap())
+		{
+			return false;
+		}
+		YAML::Node tree(YAML::NodeType::Map);
+		for (const auto& pair : flat)
+		{
+			if (!pair.first.IsScalar() || !pair.second.IsScalar())
+			{
+				return false;
+			}
+			yaml_node_at(tree, pair.first.Scalar()) = pair.second.Scalar();
+		}
+		out = yaml_text(tree);
+		return true;
 	}
 
 	// Reads the scalar at a '/'-joined path (YAML keys are the same node display
@@ -914,16 +1080,15 @@ namespace
 	// the host curates which paths to show. Paths are '/'-joined node names. The
 	// value comes from the requested scope: scope 1 (game) is the running g_cfg
 	// value; scope 0 (global) is the global-layer value (or the cfg default if the
-	// key is absent there). set_here is whether this scope holds a value distinct
-	// from what it inherits -- for game, differs from global; for global, differs
-	// from the cfg default.
-	void dump_cfg(const cfg::_base& node, const std::string& path, const YAML::Node& global_layer, int scope, std::string& out, bool& first)
+	// key is absent there). set_here is whether the player set the key at this
+	// scope: in config.yml for global, in the title's custom config for game.
+	void dump_cfg(const cfg::_base& node, const std::string& path, const YAML::Node& global_layer, const YAML::Node& player_layer, int scope, std::string& out, bool& first)
 	{
 		if (node.get_type() == cfg::type::node)
 		{
 			for (const auto* child : static_cast<const cfg::node&>(node).get_nodes())
 			{
-				dump_cfg(*child, path.empty() ? child->get_name() : path + "/" + child->get_name(), global_layer, scope, out, first);
+				dump_cfg(*child, path.empty() ? child->get_name() : path + "/" + child->get_name(), global_layer, player_layer, scope, out, first);
 			}
 			return;
 		}
@@ -935,18 +1100,9 @@ namespace
 			global_val = def;
 		}
 
-		std::string value;
-		bool set_here;
-		if (scope == 0)
-		{
-			value    = global_val;
-			set_here = global_val != def;
-		}
-		else
-		{
-			value    = node.to_string();
-			set_here = value != global_val;
-		}
+		std::string value = scope == 0 ? global_val : node.to_string();
+		std::string player_val;
+		const bool set_here = yaml_lookup(player_layer, path, player_val);
 
 		if (!first) out += ",";
 		first = false;
@@ -1810,9 +1966,10 @@ int32_t ignition_ps3_decrypt_module(const char* self_in, const char* elf_out)
 size_t ignition_ps3_config_dump(ignition_ps3*, int32_t scope, char* out, size_t cap)
 {
 	const YAML::Node global_layer = build_global_layer();
+	const YAML::Node player_layer = scope == 0 ? player_global_layer() : player_game_layer(Emu.GetTitleID());
 	std::string json = "[";
 	bool first = true;
-	dump_cfg(g_cfg, {}, global_layer, scope, json, first);
+	dump_cfg(g_cfg, {}, global_layer, player_layer, scope, json, first);
 	json += "]";
 	if (out && cap)
 	{
@@ -1836,17 +1993,13 @@ int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* val
 	if (!node || node->get_type() == cfg::type::node) return -1;
 	const bool needs_restart = !Emu.IsStopped() && !node->get_is_dynamic();
 
+	// Each file holds only what the player set, so the host's layers stay
+	// between them: the key is added to the player's own tree and saved.
 	if (scope == 0)
 	{
-		// Edit our own tree and save it, exactly as emu_settings::SaveSettings does
-		// (emu_settings.cpp:302-307): SetSetting on m_current_settings, then emit +
-		// Emulator::SaveSettings(out.c_str(), title_id) with an empty title_id.
-		YAML::Node root = build_global_layer();
-		YAML::Node leaf = yaml_node_at(root, path);
-		leaf = std::string(value);
-		YAML::Emitter out;
-		emit_data(out, root);
-		Emu.SaveSettings(out.c_str(), "");
+		YAML::Node root = player_global_layer();
+		yaml_node_at(root, path) = std::string(value);
+		Emu.SaveSettings(yaml_text(root), "");
 	}
 	else
 	{
@@ -1855,9 +2008,24 @@ int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* val
 		// it in LoadSettings (emu_settings.cpp:105). Without this the per-title
 		// write fails ("failed to create temporary file") and the override is lost.
 		fs::create_path(rpcs3::utils::get_custom_config_dir());
-		Emu.SaveSettings(g_cfg.to_string(), Emu.GetTitleID());
+		YAML::Node root = player_game_layer(Emu.GetTitleID());
+		yaml_node_at(root, path) = std::string(value);
+		Emu.SaveSettings(yaml_text(root), Emu.GetTitleID());
 	}
 	return needs_restart ? 1 : 0;
+}
+
+int32_t ignition_ps3_set_config_layers(ignition_ps3*, const char* under_global, const char* under_game, const char* over_game)
+{
+	std::array<std::string, 3> layers;
+	if (!config_paths_to_yaml(under_global, layers[0]) || !config_paths_to_yaml(under_game, layers[1]) ||
+		!config_paths_to_yaml(over_game, layers[2]))
+	{
+		return 0;
+	}
+	std::lock_guard lock(g_config_layers_mtx);
+	g_config_layers = std::move(layers);
+	return 1;
 }
 
 // Resets a whole scope to what it inherits, mirroring RPCS3's layer model.
@@ -1869,31 +2037,20 @@ int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* val
 //   deletes THIS title's custom config, so it follows the now-default global.
 void ignition_ps3_config_reset(ignition_ps3*, int32_t scope, int32_t and_narrower)
 {
-	if (scope == 1)
+	// The player's settings at that scope go, and the running title takes the
+	// configuration a boot would give it, the host's layers included.
+	const std::string title_id = Emu.GetTitleID();
+	if (scope == 1 || (and_narrower && !title_id.empty()))
 	{
-		fs::remove_file(rpcs3::utils::get_custom_config_path(Emu.GetTitleID()));
-
-		YAML::Node root = build_global_layer();
-		YAML::Emitter out;
-		emit_data(out, root);
-		g_cfg.from_string(out.c_str(), true);
+		fs::remove_file(rpcs3::utils::get_custom_config_path(title_id));
 	}
-	else
+	if (scope == 0)
 	{
-		const std::string title_id = Emu.GetTitleID();
-		const bool from_global = !fs::is_file(rpcs3::utils::get_custom_config_path(title_id));
-
-		// g_cfg_defaults is the emitted from-default config (Emu/System.cpp:500),
-		// the same source emu_settings::RestoreDefaults clones from.
-		Emu.SaveSettings(g_cfg_defaults, "");
-		if (from_global)
-		{
-			g_cfg.from_string(g_cfg_defaults, true);
-		}
-		if (and_narrower && !title_id.empty())
-		{
-			fs::remove_file(rpcs3::utils::get_custom_config_path(title_id));
-		}
+		fs::write_file(global_config_path(), fs::rewrite, std::string("{}\n"));
+	}
+	if (!Emu.IsStopped())
+	{
+		g_cfg.from_string(boot_config(), true);
 	}
 }
 

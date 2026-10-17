@@ -432,6 +432,29 @@ extern void dump_executable(std::span<const u8> data, const ppu_module<lv2_obj>*
 	}
 }
 
+// An embedding host's settings at one place in the boot's configuration
+// (emu_callbacks::get_config_layer).
+static void apply_config_layer(config_layer layer)
+{
+	if (!g_emu_callbacks.get_config_layer)
+	{
+		return;
+	}
+	const std::string yaml = g_emu_callbacks.get_config_layer(layer);
+	if (yaml.empty())
+	{
+		return;
+	}
+	if (g_cfg.from_string(yaml))
+	{
+		sys_log.notice("Applied the host's config layer %d:\n%s", static_cast<int>(layer), yaml);
+	}
+	else
+	{
+		sys_log.error("Failed to apply the host's config layer %d", static_cast<int>(layer));
+	}
+}
+
 void Emulator::Init()
 {
 	// Log LLVM version
@@ -606,9 +629,11 @@ void Emulator::Init()
 		}
 	}
 
-	// Reload global configuration
+	// Reload global configuration, over an embedding host's settings for it
 	if (m_config_mode != cfg_mode::config_override && m_config_mode != cfg_mode::default_config)
 	{
+		apply_config_layer(config_layer::under_global);
+
 		if (const fs::file cfg_file{cfg_path, fs::read + fs::create})
 		{
 			sys_log.notice("Applying global config: %s", cfg_path);
@@ -1790,6 +1815,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				m_add_database_config = false;
 			}
 
+			if (m_config_mode == cfg_mode::custom || m_config_mode == cfg_mode::continuous)
+			{
+				apply_config_layer(config_layer::under_game);
+			}
+
 			if (m_config_mode == cfg_mode::custom_selection || (m_config_mode == cfg_mode::continuous && !m_config_path.empty()))
 			{
 				if (fs::file cfg_file{ m_config_path })
@@ -1860,6 +1890,11 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				{
 					sys_log.error("Failed to apply database config");
 				}
+			}
+
+			if (m_config_mode == cfg_mode::custom || m_config_mode == cfg_mode::continuous)
+			{
+				apply_config_layer(config_layer::over_game);
 			}
 
 			// Disable incompatible settings

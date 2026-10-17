@@ -4,6 +4,7 @@
 #include "util/shared_ptr.hpp"
 
 #include <functional>
+#include <string>
 
 enum class localized_string_id;
 
@@ -11,6 +12,16 @@ namespace cfg
 {
 	class _base;
 }
+
+// Where an embedding host's settings go into the configuration at boot:
+// below the global config, between it and the game's custom config, and
+// above both.
+enum class config_layer
+{
+	under_global,
+	under_game,
+	over_game,
+};
 
 struct emu_callbacks
 {
@@ -32,6 +43,7 @@ struct emu_callbacks
 	std::function<void(std::string_view title_id)> init_pad_handler;
 	std::function<void()> update_emu_settings;
 	std::function<void()> save_emu_settings;
+	std::function<std::string(config_layer)> get_config_layer; // YAML, or empty for none
 	std::function<void()> close_gs_frame;
 	std::function<std::unique_ptr<class GSFrameBase>()> get_gs_frame;
 	std::function<std::shared_ptr<class camera_handler_base>()> get_camera_handler;

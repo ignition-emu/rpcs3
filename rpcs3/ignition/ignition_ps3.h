@@ -293,6 +293,16 @@ IGNITION_PS3_API size_t  ignition_ps3_config_dump(ignition_ps3*, int32_t scope, 
 // it takes effect now, 1 when it needs a restart, -1 if the path is no setting.
 IGNITION_PS3_API int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* value, int32_t scope);
 
+// Settings the host layers into RPCS3's configuration at each boot and never
+// saves: under_global below config.yml, under_game between it and the game's
+// custom config, over_game above both. Each is a JSON object of setting paths
+// as config_dump gives them ("Video/Shader Mode") to values, or null or "" for
+// none, and stays until set again. config.yml and each custom config hold
+// only what the player set, so a layer below them shows through where the
+// player has set nothing. Returns 1, or 0 when one does not parse, and then
+// changes none. Optional within ABI 4: modules after ignition-v0.1.7 export it.
+IGNITION_PS3_API int32_t ignition_ps3_set_config_layers(ignition_ps3*, const char* under_global, const char* under_game, const char* over_game);
+
 // config_reset reverts a whole scope to what it inherits. scope 1 (game): drop
 // this title's custom config so it follows the global layer, applied live. scope
 // 0 (global): reset config.yml to the built-in defaults; and_narrower != 0 also
