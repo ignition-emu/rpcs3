@@ -233,11 +233,18 @@ struct ignition_ps3
 	std::atomic<std::thread::id> pump_thread{};
 
 	// The newest presented frame, written from the RSX thread via the gs frame's
-	// present_frame and read by the host on take_frame.
+	// present_frame, and the one take_frame gave the host, which the host reads
+	// after the lock is released: present_frame never touches it, and the next
+	// take_frame swaps it back, as the ABI promises.
+	struct presented_frame
+	{
+		std::vector<uint8_t> data;
+		uint32_t w = 0, h = 0, pitch = 0;
+		bool bgra = false;
+	};
 	std::mutex frame_mtx;
-	std::vector<uint8_t> frame_data;
-	uint32_t frame_w = 0, frame_h = 0, frame_pitch = 0;
-	bool frame_bgra = false, frame_new = false;
+	presented_frame frame_pending, frame_taken;
+	bool frame_new = false;
 
 	// Captured audio: the backend drains cell_audio at a steady device cadence
 	// (like cubeb's data_cb) into this ring; read_audio serves Godot from it, so
@@ -1277,15 +1284,17 @@ int32_t ignition_ps3_take_frame(ignition_ps3* self, ignition_ps3_frame* out)
 		return 0;
 	}
 	std::lock_guard lock(self->frame_mtx);
-	if (!self->frame_new || self->frame_data.empty())
+	if (!self->frame_new || self->frame_pending.data.empty())
 	{
 		return 0;
 	}
-	out->data = self->frame_data.data();
-	out->pitch = self->frame_pitch;
-	out->width = self->frame_w;
-	out->height = self->frame_h;
-	out->is_bgra = self->frame_bgra ? 1 : 0;
+	std::swap(self->frame_taken, self->frame_pending);
+	const auto& frame = self->frame_taken;
+	out->data = frame.data.data();
+	out->pitch = frame.pitch;
+	out->width = frame.w;
+	out->height = frame.h;
+	out->is_bgra = frame.bgra ? 1 : 0;
 	self->frame_new = false;
 	return 1;
 }
@@ -1792,10 +1801,6 @@ void ignition_gs_frame::present_frame(std::vector<u8>&& data, u32 pitch, u32 wid
 		return;
 	}
 	std::lock_guard lock(g_inst->frame_mtx);
-	g_inst->frame_data = std::move(data);
-	g_inst->frame_pitch = pitch;
-	g_inst->frame_w = width;
-	g_inst->frame_h = height;
-	g_inst->frame_bgra = is_bgra;
+	g_inst->frame_pending = {std::move(data), width, height, pitch, is_bgra};
 	g_inst->frame_new = true;
 }
