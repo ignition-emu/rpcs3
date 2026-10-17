@@ -2645,6 +2645,22 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 		// anchor's link address maps it to the image (the load base)
 		const uptr anchor = reinterpret_cast<uptr>(&signal_handler);
 		fmt::append(msg, "PS5 context: rip=%p rsp=%p rbp=%p anchor(signal_handler)=%p\n", RIP(context), RSP(context), *X64REG(context, 5), anchor);
+
+		// A fault in a leaf function (a system library's, whose code cannot be
+		// read) leaves its caller's return address on the stack: the words there
+		// that point into code, the module's or the system libraries'.
+		const auto* stack = reinterpret_cast<const u64*>(RSP(context));
+		fmt::append(msg, "PS5 stack code addresses:");
+		for (u32 i = 0, found = 0; i < 256 && found < 16; i++)
+		{
+			const u64 word = stack[i];
+			if ((word >= 0x4'0000'0000 && word < 0x8'0000'0000) || (word >= 0x8'0000'0000 && word < 0x9'0000'0000))
+			{
+				fmt::append(msg, " [%u]%x", i, word);
+				found++;
+			}
+		}
+		fmt::append(msg, "\n");
 	}
 #endif
 
