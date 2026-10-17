@@ -196,6 +196,23 @@ private:
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 
+	// An embedding host's frame slots, imported into this device, each with
+	// the command buffer that copies a captured frame into it. Its fence
+	// tells the host when the frame is written.
+	struct frame_slot_commands : vk::command_buffer
+	{
+		VkFence fence() const { return m_submit_fence->handle; }
+		bool pending() const { return is_pending; }
+	};
+	struct frame_slot_copy
+	{
+		std::unique_ptr<vk::buffer> buffer;
+		frame_slot_commands commands;
+	};
+	std::unordered_map<u8*, std::unique_ptr<frame_slot_copy>> m_frame_slot_copies;
+	frame_slot_copy* get_frame_slot_copy(u8* slot, usz bytes);
+	bool present_to_frame_slot(vk::image* image, u32 width, u32 height);
+
 	//Vertex layout
 	rsx::vertex_input_layout m_vertex_layout;
 

@@ -717,102 +717,110 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 		const usz sshot_size = capture_height * capture_width * 4;
 
-		vk::buffer sshot_vkbuf(*m_device, utils::align(sshot_size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
-
-		VkBufferImageCopy copy_info{};
-		copy_info.bufferOffset = 0;
-		copy_info.bufferRowLength = 0;
-		copy_info.bufferImageHeight = 0;
-		copy_info.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		copy_info.imageSubresource.baseArrayLayer = 0;
-		copy_info.imageSubresource.layerCount = 1;
-		copy_info.imageSubresource.mipLevel = 0;
-		copy_info.imageOffset.x = 0;
-		copy_info.imageOffset.y = 0;
-		copy_info.imageOffset.z = 0;
-		copy_info.imageExtent.width = capture_width;
-		copy_info.imageExtent.height = capture_height;
-		copy_info.imageExtent.depth = 1;
-
-		vk::image* image_to_copy = image_to_flip;
-
-		if (overlay_in_capture)
+		// Into an embedding host's frame slot on the GPU, where it gave slots
+		// that this device imports: the frame is neither waited for nor copied
+		// here.
+		const bool in_frame_slot = !user_asked_for_screenshot && !overlay_in_capture &&
+			present_to_frame_slot(image_to_flip, capture_width, capture_height);
+		if (!in_frame_slot)
 		{
-			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
-			single_target_pass = vk::get_renderpass(*m_device, key);
-			ensure(single_target_pass != VK_NULL_HANDLE);
+			vk::buffer sshot_vkbuf(*m_device, utils::align(sshot_size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
 
-			if (m_overlay_recording_img)
+			VkBufferImageCopy copy_info{};
+			copy_info.bufferOffset = 0;
+			copy_info.bufferRowLength = 0;
+			copy_info.bufferImageHeight = 0;
+			copy_info.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			copy_info.imageSubresource.baseArrayLayer = 0;
+			copy_info.imageSubresource.layerCount = 1;
+			copy_info.imageSubresource.mipLevel = 0;
+			copy_info.imageOffset.x = 0;
+			copy_info.imageOffset.y = 0;
+			copy_info.imageOffset.z = 0;
+			copy_info.imageExtent.width = capture_width;
+			copy_info.imageExtent.height = capture_height;
+			copy_info.imageExtent.depth = 1;
+
+			vk::image* image_to_copy = image_to_flip;
+
+			if (overlay_in_capture)
 			{
-				// Validate
-				if (m_overlay_recording_img->format() != image_to_flip->format() ||
-					m_overlay_recording_img->width() != (scaled_capture ? capture_width : image_to_flip->width()) ||
-					m_overlay_recording_img->height() != (scaled_capture ? capture_height : image_to_flip->height()))
+				const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+				single_target_pass = vk::get_renderpass(*m_device, key);
+				ensure(single_target_pass != VK_NULL_HANDLE);
+
+				if (m_overlay_recording_img)
 				{
-					// Dispose correctly
-					vk::remove_framebuffers_with_image(m_overlay_recording_img.get());
-					vk::get_resource_manager()->dispose(m_overlay_recording_img);
+					// Validate
+					if (m_overlay_recording_img->format() != image_to_flip->format() ||
+						m_overlay_recording_img->width() != (scaled_capture ? capture_width : image_to_flip->width()) ||
+						m_overlay_recording_img->height() != (scaled_capture ? capture_height : image_to_flip->height()))
+					{
+						// Dispose correctly
+						vk::remove_framebuffers_with_image(m_overlay_recording_img.get());
+						vk::get_resource_manager()->dispose(m_overlay_recording_img);
+					}
 				}
+
+				if (!m_overlay_recording_img)
+				{
+					m_overlay_recording_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+						VK_IMAGE_TYPE_2D, image_to_flip->format(),
+						scaled_capture ? capture_width : image_to_flip->width(), scaled_capture ? capture_height : image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+						VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+						0, VMM_ALLOCATION_POOL_SYSTEM);
+				}
+
+				m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+				// A plain copy when the sizes match, a linear blit when scaled.
+				const areai capture_rect = areai(0, 0, capture_width, capture_height);
+				vk::copy_scaled_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(),
+					{ 0, 0, 0, static_cast<s32>(buffer_width), static_cast<s32>(buffer_height), 1 },
+					{ 0, 0, 0, static_cast<s32>(capture_width), static_cast<s32>(capture_height), 1 },
+					{}, true, VK_FILTER_LINEAR);
+
+				image_to_flip->pop_layout(*m_current_command_buffer);
+				m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+				vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, capture_width, capture_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
+				sshot_fbo->add_ref();
+				// Scaled, the capture is the whole surface the host shows.
+				render_overlays(sshot_fbo, areau(capture_rect), scaled_capture ? areau(capture_rect) : swapchain_area);
+				sshot_fbo->release();
+
+				image_to_copy = m_overlay_recording_img.get();
 			}
 
-			if (!m_overlay_recording_img)
+			image_to_copy->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+			vk::copy_image_to_buffer(*m_current_command_buffer, image_to_copy, &sshot_vkbuf, copy_info);
+			image_to_copy->pop_layout(*m_current_command_buffer);
+
+			// We need to disable the driver manager temporarily as this next section is out of sequence.
+			// We're not supposed to be halting the GPU here and we certainly do not want to run driver management as we will end up deleting temp resources too early.
+			auto& driver_manager = g_fxo->get<vk::driver_manager_thread>();
+			driver_manager.set_enabled(false);
+
+			flush_command_queue(true);
+			const auto src = sshot_vkbuf.map(0, sshot_size);
+			std::vector<u8> sshot_frame(sshot_size);
+			memcpy(sshot_frame.data(), src, sshot_size);
+			sshot_vkbuf.unmap();
+
+			// Restore the driver manager state to keep things from crashing...
+			driver_manager.set_enabled(true);
+
+			const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;
+			if (user_asked_for_screenshot)
 			{
-				m_overlay_recording_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					VK_IMAGE_TYPE_2D, image_to_flip->format(),
-					scaled_capture ? capture_width : image_to_flip->width(), scaled_capture ? capture_height : image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-					0, VMM_ALLOCATION_POOL_SYSTEM);
+				m_frame->take_screenshot(std::move(sshot_frame), capture_width, capture_height, is_bgra);
 			}
-
-			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-
-			// A plain copy when the sizes match, a linear blit when scaled.
-			const areai capture_rect = areai(0, 0, capture_width, capture_height);
-			vk::copy_scaled_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(),
-				{ 0, 0, 0, static_cast<s32>(buffer_width), static_cast<s32>(buffer_height), 1 },
-				{ 0, 0, 0, static_cast<s32>(capture_width), static_cast<s32>(capture_height), 1 },
-				{}, true, VK_FILTER_LINEAR);
-
-			image_to_flip->pop_layout(*m_current_command_buffer);
-			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-
-			vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, capture_width, capture_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
-			sshot_fbo->add_ref();
-			// Scaled, the capture is the whole surface the host shows.
-			render_overlays(sshot_fbo, areau(capture_rect), scaled_capture ? areau(capture_rect) : swapchain_area);
-			sshot_fbo->release();
-
-			image_to_copy = m_overlay_recording_img.get();
-		}
-
-		image_to_copy->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-		vk::copy_image_to_buffer(*m_current_command_buffer, image_to_copy, &sshot_vkbuf, copy_info);
-		image_to_copy->pop_layout(*m_current_command_buffer);
-
-		// We need to disable the driver manager temporarily as this next section is out of sequence.
-		// We're not supposed to be halting the GPU here and we certainly do not want to run driver management as we will end up deleting temp resources too early.
-		auto& driver_manager = g_fxo->get<vk::driver_manager_thread>();
-		driver_manager.set_enabled(false);
-
-		flush_command_queue(true);
-		const auto src = sshot_vkbuf.map(0, sshot_size);
-		std::vector<u8> sshot_frame(sshot_size);
-		memcpy(sshot_frame.data(), src, sshot_size);
-		sshot_vkbuf.unmap();
-
-		// Restore the driver manager state to keep things from crashing...
-		driver_manager.set_enabled(true);
-
-		const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;
-		if (user_asked_for_screenshot)
-		{
-			m_frame->take_screenshot(std::move(sshot_frame), capture_width, capture_height, is_bgra);
-		}
-		else
-		{
-			m_frame->present_frame(std::move(sshot_frame), capture_width * 4, capture_width, capture_height, is_bgra);
+			else
+			{
+				m_frame->present_frame(std::move(sshot_frame), capture_width * 4, capture_width, capture_height, is_bgra);
+			}
 		}
 	}
 
@@ -1052,4 +1060,67 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			flush_command_queue(true);
 		}
 	}
+}
+
+VKGSRender::frame_slot_copy* VKGSRender::get_frame_slot_copy(u8* slot, usz bytes)
+{
+	if (!m_device->get_external_memory_host_support() || !bytes)
+	{
+		return nullptr;
+	}
+	auto& copy = m_frame_slot_copies[slot];
+	if (!copy)
+	{
+		auto made = std::make_unique<frame_slot_copy>();
+		made->buffer = std::make_unique<vk::buffer>(*m_device, VK_BUFFER_USAGE_TRANSFER_DST_BIT, slot, bytes);
+		made->commands.create(m_command_buffer_pool);
+		copy = std::move(made);
+	}
+	return copy.get();
+}
+
+bool VKGSRender::present_to_frame_slot(vk::image* image, u32 width, u32 height)
+{
+	const usz bytes = usz{width} * height * 4;
+	u8* const slot = m_frame->acquire_frame_slot(bytes);
+	if (!slot)
+	{
+		return false;
+	}
+	frame_slot_copy* const copy = get_frame_slot_copy(slot, m_frame->frame_slot_bytes());
+	if (!copy)
+	{
+		m_frame->release_frame_slot(slot);
+		return false;
+	}
+
+	// The frame's work goes to the GPU first, without waiting for it, and
+	// the copy after it on the same queue. Driver management stays off while
+	// the queue is flushed out of sequence, as for a readback.
+	auto& driver_manager = g_fxo->get<vk::driver_manager_thread>();
+	driver_manager.set_enabled(false);
+	flush_command_queue();
+	driver_manager.set_enabled(true);
+
+	auto& commands = copy->commands;
+	commands.begin();
+	VkBufferImageCopy region{};
+	region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	region.imageSubresource.layerCount = 1;
+	region.imageExtent = { width, height, 1 };
+	image->push_layout(commands, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+	vk::copy_image_to_buffer(commands, image, copy->buffer.get(), region);
+	image->pop_layout(commands);
+	// The host reads the slot once the fence signals.
+	vk::insert_buffer_memory_barrier(commands, copy->buffer->value, 0, bytes, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+	commands.end();
+	vk::queue_submit_t submit_info{ m_device->get_graphics_queue(), nullptr };
+	commands.submit(submit_info, VK_FALSE);
+
+	const VkDevice device = *m_device;
+	const VkFence fence = commands.fence();
+	m_frame->present_frame_slot(slot, [device, fence]() { return vkGetFenceStatus(device, fence) == VK_SUCCESS; },
+		width * 4, width, height, image->format() == VK_FORMAT_B8G8R8A8_UNORM);
+	return true;
 }

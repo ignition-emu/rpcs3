@@ -900,6 +900,23 @@ VKGSRender::~VKGSRender()
 	m_overlay_recording_img.reset();
 	m_stencil_mirror_sampler.reset();
 
+	// A host's slots: their copies finish before they are freed, and every
+	// frame passed in one then counts as written.
+	for (auto& [slot, copy] : m_frame_slot_copies)
+	{
+		if (copy->commands.pending())
+		{
+			const VkFence fence = copy->commands.fence();
+			vkWaitForFences(*m_device, 1, &fence, VK_TRUE, umax);
+		}
+		copy->commands.destroy();
+	}
+	m_frame_slot_copies.clear();
+	if (m_frame)
+	{
+		m_frame->settle_frame_slots();
+	}
+
 	// Queries
 	m_occlusion_query_manager.reset();
 	m_cond_render_buffer.reset();

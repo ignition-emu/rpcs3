@@ -164,14 +164,16 @@ IGNITION_PS3_API void ignition_ps3_set_output_size(ignition_ps3*, uint32_t width
 
 // Frame buffers the host owns: `count` slots of `slot_bytes` each, which the
 // host can share with its GPU. With them set, a presented frame that fits
-// goes into a slot the host does not hold, with each pixel's fourth byte set
-// to 0xff, and take_frame's data points into that slot. The host then holds
-// the slot, past later takes, until release_frame gives it back. A frame
-// larger than a slot, or one presented while the host holds every slot,
-// comes in the module's own buffer as without slots: valid until the next
-// take, and not released. Set them before boot; null slots or a count of 0
-// return to the module's own buffers. Returns 1 when set, 0 while a frame is
-// being written into a slot.
+// goes into a slot the host does not hold, written by the renderer's GPU
+// where its device imports the slots, and take_frame's data points into that
+// slot once it is written. Each pixel's fourth byte is what the game left in
+// its framebuffer, which is no alpha: a host draws the frame opaque. The host
+// then holds the slot, past later takes, until release_frame gives it back. A
+// frame larger than a slot, or one presented while the host holds every
+// slot, comes in the module's own buffer as without slots: valid until the
+// next take, and not released. Set them before boot; null slots or a count
+// of 0 return to the module's own buffers. Returns 1 when set, 0 while a
+// frame is being written into a slot.
 //
 // Both are optional within ABI 4: modules after ignition-v0.1.7 export them,
 // earlier ones do not, so a host resolves them by name and takes every frame
