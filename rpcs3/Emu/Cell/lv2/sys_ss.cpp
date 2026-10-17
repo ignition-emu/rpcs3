@@ -9,6 +9,7 @@
 #include "util/sysinfo.hpp"
 
 #include <charconv>
+#include <cstdlib>
 #include <shared_mutex>
 #include <unordered_set>
 
@@ -142,6 +143,9 @@ error_code sys_ss_random_number_generator(u64 pkg_id, vm::ptr<void> buf, u64 siz
 	{
 		fmt::throw_exception("sys_ss_random_number_generator(): BCryptGenRandom failed (0x%08x)", ret);
 	}
+#elif defined(__PROSPERO__)
+	// A PS5 title cannot open /dev/urandom.
+	arc4random_buf(temp.get(), size);
 #else
 	fs::file rnd{"/dev/urandom"};
 
