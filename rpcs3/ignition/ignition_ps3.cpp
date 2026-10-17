@@ -16,6 +16,9 @@
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
 #include "Emu/RSX/GSFrameBase.h"
+#include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/SPUThread.h"
+#include "Emu/IdManager.h"
 #include "Emu/system_config.h"
 #include "Emu/Io/Null/null_camera_handler.h"
 #include "Emu/Io/Null/null_music_handler.h"
@@ -54,6 +57,7 @@
 #include <chrono>
 #include <clocale>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <mutex>
@@ -63,6 +67,7 @@
 #include <Windows.h>
 #else
 #include <dlfcn.h>
+#include <sys/resource.h>
 #endif
 
 // Xlib's macros, which VKGSRender.h brings in through the X11 swapchain, collide
@@ -254,6 +259,16 @@ struct ignition_ps3
 	std::deque<int16_t> audio_ring;
 	capture_audio_backend* audio_backend = nullptr;
 	uint32_t audio_hz = 0;
+
+	// What ignition_ps3_stats_of and ignition_ps3_take_frame_intervals report.
+	// The frame counts and intervals are guarded by frame_mtx, the shed audio
+	// by audio_mtx, and the CPU times are summed on the host thread.
+	static constexpr size_t interval_capacity = 4096;
+	std::vector<uint32_t> frame_intervals;
+	std::chrono::steady_clock::time_point last_present{};
+	uint64_t frames_presented = 0, frames_replaced = 0, intervals_dropped = 0;
+	uint64_t audio_frames_shed = 0;
+	uint64_t ppu_cpu_ns = 0, spu_cpu_ns = 0, rsx_cpu_ns = 0;
 };
 
 // A windowless GSFrameBase. It never presents to a window: it forces the RSX to
@@ -405,6 +420,10 @@ private:
 						}
 						// Shed past ~100 ms so a stalled reader can't build latency.
 						const size_t cap = static_cast<size_t>(static_cast<u32>(m_sampling_rate)) * 2 / 10;
+						if (ring.size() > cap)
+						{
+							g_inst->audio_frames_shed += (ring.size() - cap) / 2;
+						}
 						while (ring.size() > cap)
 						{
 							ring.pop_front();
@@ -1394,6 +1413,81 @@ uint32_t ignition_ps3_audio_rate(const ignition_ps3* self)
 	return self ? self->audio_hz : 0;
 }
 
+int32_t ignition_ps3_stats_of(ignition_ps3* self, ignition_ps3_stats* out)
+{
+	if (!self || !out)
+	{
+		return 0;
+	}
+
+	ignition_ps3_stats stats{};
+	// Each thread's counter gives its CPU time since the counter was last read,
+	// so the sums here are each group's time since the instance began.
+	if (Emu.IsRunning() || Emu.IsPaused())
+	{
+		stats.ppu_threads = idm::select<named_thread<ppu_thread>>([self](u32, named_thread<ppu_thread>& ppu)
+		{
+			self->ppu_cpu_ns += thread_ctrl::get_cycles(ppu);
+		});
+		stats.spu_threads = idm::select<named_thread<spu_thread>>([self](u32, named_thread<spu_thread>& spu)
+		{
+			self->spu_cpu_ns += thread_ctrl::get_cycles(spu);
+		});
+		if (auto* rsx_thread = g_fxo->try_get<rsx::thread>())
+		{
+			self->rsx_cpu_ns += rsx_thread->get_cycles();
+		}
+	}
+	stats.ppu_cpu_ns = self->ppu_cpu_ns;
+	stats.spu_cpu_ns = self->spu_cpu_ns;
+	stats.rsx_cpu_ns = self->rsx_cpu_ns;
+
+#ifdef _WIN32
+	FILETIME created, exited, kernel, user;
+	if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+	{
+		const auto ticks = [](const FILETIME& time) { return (u64{time.dwHighDateTime} << 32) | time.dwLowDateTime; };
+		stats.process_cpu_ns = (ticks(kernel) + ticks(user)) * 100;
+	}
+#else
+	if (rusage usage{}; !getrusage(RUSAGE_SELF, &usage))
+	{
+		const auto ns = [](const timeval& time) { return u64(time.tv_sec) * 1'000'000'000 + u64(time.tv_usec) * 1'000; };
+		stats.process_cpu_ns = ns(usage.ru_utime) + ns(usage.ru_stime);
+	}
+#endif
+
+	{
+		std::lock_guard lock(self->frame_mtx);
+		stats.frames_presented = self->frames_presented;
+		stats.frames_replaced = self->frames_replaced;
+		stats.intervals_dropped = self->intervals_dropped;
+	}
+	{
+		std::lock_guard lock(self->audio_mtx);
+		stats.audio_frames_shed = self->audio_frames_shed;
+	}
+
+	const size_t size = std::min<size_t>(out->size, sizeof(stats));
+	stats.size = static_cast<uint32_t>(size);
+	std::memcpy(out, &stats, size);
+	return 1;
+}
+
+size_t ignition_ps3_take_frame_intervals(ignition_ps3* self, uint32_t* out_us, size_t max)
+{
+	if (!self || !out_us)
+	{
+		return 0;
+	}
+	std::lock_guard lock(self->frame_mtx);
+	auto& intervals = self->frame_intervals;
+	const size_t count = std::min(max, intervals.size());
+	std::copy_n(intervals.begin(), count, out_us);
+	intervals.erase(intervals.begin(), intervals.begin() + count);
+	return count;
+}
+
 // Installs a PS3 firmware PUP into dev_flash, the same extraction RPCS3's GUI
 // does: parse the PUP, take file 0x300 (a TAR of dev_flash_* SELFs), decrypt
 // each and extract its inner TAR into the mounted dev_flash. Zero on success.
@@ -1800,7 +1894,23 @@ void ignition_gs_frame::present_frame(std::vector<u8>&& data, u32 pitch, u32 wid
 	{
 		return;
 	}
+	const auto now = std::chrono::steady_clock::now();
 	std::lock_guard lock(g_inst->frame_mtx);
+	g_inst->frames_replaced += g_inst->frame_new;
+	g_inst->frames_presented++;
+	if (g_inst->last_present != std::chrono::steady_clock::time_point{})
+	{
+		if (g_inst->frame_intervals.size() < ignition_ps3::interval_capacity)
+		{
+			g_inst->frame_intervals.push_back(static_cast<uint32_t>(
+				std::chrono::duration_cast<std::chrono::microseconds>(now - g_inst->last_present).count()));
+		}
+		else
+		{
+			g_inst->intervals_dropped++;
+		}
+	}
+	g_inst->last_present = now;
 	g_inst->frame_pending = {std::move(data), width, height, pitch, is_bgra};
 	g_inst->frame_new = true;
 }
