@@ -1,5 +1,8 @@
 # hidapi
-if(USE_SYSTEM_HIDAPI)
+if(PS5)
+	# A PS5 title has no HID access, and nothing it builds uses hidapi.
+	add_library(3rdparty_hidapi INTERFACE)
+elseif(USE_SYSTEM_HIDAPI)
 	message(STATUS "RPCS3: using shared hidapi")
 	pkg_check_modules(hidapi-hidraw REQUIRED IMPORTED_TARGET hidapi-hidraw)
 	add_library(3rdparty_hidapi INTERFACE)
