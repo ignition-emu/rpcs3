@@ -3912,6 +3912,13 @@ void thread_ctrl::set_native_priority(int priority)
 	{
 		sig_log.error("SetThreadPriority() failed: %s", fmt::win_error{GetLastError(), nullptr});
 	}
+#elif defined(__PROSPERO__)
+	// A title's threads run first-in first-out, and 256 is the highest of
+	// their priorities: the policy's maximum is the lowest priority, so the
+	// code below would give the RSX thread the lowest and the compilers the
+	// highest. Every thread keeps the title's priority, as SCHED_OTHER's
+	// single priority keeps them on Linux.
+	static_cast<void>(priority);
 #else
 	int policy;
 	struct sched_param param;
