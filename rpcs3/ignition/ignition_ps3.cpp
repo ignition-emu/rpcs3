@@ -285,6 +285,7 @@ struct ignition_ps3
 	std::vector<uint32_t> frame_intervals;
 	std::chrono::steady_clock::time_point last_present{};
 	uint64_t frames_presented = 0, frames_replaced = 0, intervals_dropped = 0;
+	uint32_t gpu_slot_frames = 0;
 	uint64_t audio_frames_shed = 0;
 	uint64_t ppu_cpu_ns = 0, spu_cpu_ns = 0, rsx_cpu_ns = 0;
 };
@@ -1552,6 +1553,7 @@ int32_t ignition_ps3_stats_of(ignition_ps3* self, ignition_ps3_stats* out)
 		stats.frames_presented = self->frames_presented;
 		stats.frames_replaced = self->frames_replaced;
 		stats.intervals_dropped = self->intervals_dropped;
+		stats.gpu_slot_frames = self->gpu_slot_frames;
 	}
 	{
 		std::lock_guard lock(self->audio_mtx);
@@ -2056,6 +2058,7 @@ void ignition_gs_frame::present_frame_slot(u8* data, std::function<bool()> writt
 		if (inst.slots[i].data == data)
 		{
 			inst.slots[i] = {data, ignition_ps3::slot_state::pending, width, height, pitch, is_bgra, std::move(written)};
+			inst.gpu_slot_frames++;
 			inst.pending_slot = static_cast<int>(i);
 			inst.frame_new = true;
 			return;
