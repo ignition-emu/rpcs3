@@ -32,11 +32,12 @@ namespace utils::ps5
 		constexpr u64 gpu_window_begin = 0x2'0000'0000;
 		constexpr u64 gpu_window_end = 0x3'0000'0000;
 
-		// Ranges asked for with no address go from here up: the kernel grants
-		// a range at its hint from 0x10_0000_0000 to 0x80_0000_0000, and guest
-		// memory takes the start of that.
-		constexpr u64 anywhere_begin = 0x40'0000'0000;
-		constexpr u64 anywhere_end = 0x80'0000'0000;
+		// Ranges asked for with no address go here. The kernel grants a range at
+		// its hint from 0x10_0000_0000 to 0x80_0000_0000. Guest memory takes the
+		// start of that, and the title's RADV places device memory from
+		// 0x40_0000_0000, where the GPU reaches it.
+		constexpr u64 anywhere_begin = 0x20'0000'0000;
+		constexpr u64 anywhere_end = 0x40'0000'0000;
 
 		// Statically initialized and never destroyed: RPCS3's static initializers
 		// commit memory, and can run before this file's.
