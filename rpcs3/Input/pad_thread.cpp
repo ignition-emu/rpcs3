@@ -17,7 +17,7 @@
 #ifdef HAVE_SDL3
 #include "sdl_pad_handler.h"
 #endif
-#ifndef ANDROID
+#if !defined(ANDROID) && !defined(__PROSPERO__) // Qt's, which the PS5 module does not build
 #include "keyboard_pad_handler.h"
 #endif
 #include "Emu/Io/Null/NullPadHandler.h"
@@ -156,7 +156,7 @@ void pad_thread::Init()
 
 	input_log.trace("Using pad config:\n%s", g_cfg_input);
 
-#ifndef ANDROID
+#if !defined(ANDROID) && !defined(IGNITION_EMBED) // Used only where the GUI keyboard handler is built, below
 	std::shared_ptr<keyboard_pad_handler> keyptr;
 #endif
 
