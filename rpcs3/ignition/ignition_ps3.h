@@ -162,6 +162,23 @@ IGNITION_PS3_API int32_t ignition_ps3_take_frame(ignition_ps3*, ignition_ps3_fra
 // do not, so a host resolves it by name and skips the call without it.
 IGNITION_PS3_API void ignition_ps3_set_output_size(ignition_ps3*, uint32_t width, uint32_t height);
 
+// Frame buffers the host owns: `count` slots of `slot_bytes` each, which the
+// host can share with its GPU. With them set, a presented frame that fits
+// goes into a slot the host does not hold, with each pixel's fourth byte set
+// to 0xff, and take_frame's data points into that slot. The host then holds
+// the slot, past later takes, until release_frame gives it back. A frame
+// larger than a slot, or one presented while the host holds every slot,
+// comes in the module's own buffer as without slots: valid until the next
+// take, and not released. Set them before boot; null slots or a count of 0
+// return to the module's own buffers. Returns 1 when set, 0 while a frame is
+// being written into a slot.
+//
+// Both are optional within ABI 4: modules after ignition-v0.1.7 export them,
+// earlier ones do not, so a host resolves them by name and takes every frame
+// in the module's buffer without them.
+IGNITION_PS3_API int32_t ignition_ps3_set_frame_slots(ignition_ps3*, uint8_t* const* slots, uint32_t count, size_t slot_bytes);
+IGNITION_PS3_API void ignition_ps3_release_frame(ignition_ps3*, const uint8_t* data);
+
 // The pad the emulator reads until replaced. Set once per tick, like the
 // libretro host's input snapshot.
 IGNITION_PS3_API void ignition_ps3_set_pad(ignition_ps3*, uint32_t port, const ignition_ps3_pad*);

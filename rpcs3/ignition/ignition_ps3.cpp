@@ -251,6 +251,21 @@ struct ignition_ps3
 	presented_frame frame_pending, frame_taken;
 	bool frame_new = false;
 
+	// The host's frame slots (ignition_ps3_set_frame_slots), guarded by
+	// frame_mtx. present_frame writes a free one, which is then pending until
+	// a take, and held by the host until it releases it.
+	enum class slot_state { free, writing, pending, held };
+	struct frame_slot
+	{
+		uint8_t* data = nullptr;
+		slot_state state = slot_state::free;
+		uint32_t w = 0, h = 0, pitch = 0;
+		bool bgra = false;
+	};
+	std::vector<frame_slot> slots;
+	size_t slot_bytes = 0;
+	int pending_slot = -1;
+
 	// Captured audio: the backend drains cell_audio at a steady device cadence
 	// (like cubeb's data_cb) into this ring; read_audio serves Godot from it, so
 	// the render loop's jitter never reaches cell_audio's time-stretch. Guarded
@@ -1303,7 +1318,24 @@ int32_t ignition_ps3_take_frame(ignition_ps3* self, ignition_ps3_frame* out)
 		return 0;
 	}
 	std::lock_guard lock(self->frame_mtx);
-	if (!self->frame_new || self->frame_pending.data.empty())
+	if (!self->frame_new)
+	{
+		return 0;
+	}
+	if (self->pending_slot >= 0)
+	{
+		auto& slot = self->slots[self->pending_slot];
+		slot.state = ignition_ps3::slot_state::held;
+		self->pending_slot = -1;
+		out->data = slot.data;
+		out->pitch = slot.pitch;
+		out->width = slot.w;
+		out->height = slot.h;
+		out->is_bgra = slot.bgra ? 1 : 0;
+		self->frame_new = false;
+		return 1;
+	}
+	if (self->frame_pending.data.empty())
 	{
 		return 0;
 	}
@@ -1317,6 +1349,51 @@ int32_t ignition_ps3_take_frame(ignition_ps3* self, ignition_ps3_frame* out)
 	self->frame_new = false;
 	return 1;
 }
+int32_t ignition_ps3_set_frame_slots(ignition_ps3* self, uint8_t* const* slots, uint32_t count, size_t slot_bytes)
+{
+	if (!self)
+	{
+		return 0;
+	}
+	std::lock_guard lock(self->frame_mtx);
+	for (const auto& slot : self->slots)
+	{
+		if (slot.state == ignition_ps3::slot_state::writing)
+		{
+			return 0;
+		}
+	}
+	self->slots.clear();
+	self->slot_bytes = 0;
+	self->pending_slot = -1;
+	if (slots && count && slot_bytes)
+	{
+		for (uint32_t i = 0; i < count; i++)
+		{
+			self->slots.push_back({.data = slots[i]});
+		}
+		self->slot_bytes = slot_bytes;
+	}
+	return 1;
+}
+
+void ignition_ps3_release_frame(ignition_ps3* self, const uint8_t* data)
+{
+	if (!self || !data)
+	{
+		return;
+	}
+	std::lock_guard lock(self->frame_mtx);
+	for (auto& slot : self->slots)
+	{
+		if (slot.data == data && slot.state == ignition_ps3::slot_state::held)
+		{
+			slot.state = ignition_ps3::slot_state::free;
+			return;
+		}
+	}
+}
+
 void ignition_ps3_set_pad(ignition_ps3* self, uint32_t port, const ignition_ps3_pad* in)
 {
 	if (!self || !in || port >= static_cast<uint32_t>(CELL_PAD_MAX_PORT_NUM))
@@ -1894,23 +1971,69 @@ void ignition_gs_frame::present_frame(std::vector<u8>&& data, u32 pitch, u32 wid
 	{
 		return;
 	}
+	auto& inst = *g_inst;
 	const auto now = std::chrono::steady_clock::now();
-	std::lock_guard lock(g_inst->frame_mtx);
-	g_inst->frames_replaced += g_inst->frame_new;
-	g_inst->frames_presented++;
-	if (g_inst->last_present != std::chrono::steady_clock::time_point{})
+	const size_t bytes = size_t{pitch} * height;
+	int slot = -1;
 	{
-		if (g_inst->frame_intervals.size() < ignition_ps3::interval_capacity)
+		std::lock_guard lock(inst.frame_mtx);
+		inst.frames_presented++;
+		if (inst.last_present != std::chrono::steady_clock::time_point{})
 		{
-			g_inst->frame_intervals.push_back(static_cast<uint32_t>(
-				std::chrono::duration_cast<std::chrono::microseconds>(now - g_inst->last_present).count()));
+			if (inst.frame_intervals.size() < ignition_ps3::interval_capacity)
+			{
+				inst.frame_intervals.push_back(static_cast<uint32_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(now - inst.last_present).count()));
+			}
+			else
+			{
+				inst.intervals_dropped++;
+			}
 		}
-		else
+		inst.last_present = now;
+		// A slot the host does not hold, when the frame fits one.
+		for (usz i = 0; bytes <= inst.slot_bytes && bytes <= data.size() && i < inst.slots.size(); i++)
 		{
-			g_inst->intervals_dropped++;
+			if (inst.slots[i].state == ignition_ps3::slot_state::free)
+			{
+				inst.slots[i].state = ignition_ps3::slot_state::writing;
+				slot = static_cast<int>(i);
+				break;
+			}
 		}
 	}
-	g_inst->last_present = now;
-	g_inst->frame_pending = {std::move(data), width, height, pitch, is_bgra};
-	g_inst->frame_new = true;
+
+	// The slot is this thread's while it is being written, so the copy runs
+	// outside the lock. The fourth byte is the game's framebuffer alpha, which
+	// a host drawing the slot on its GPU would show: each pixel is made opaque.
+	if (slot >= 0)
+	{
+		const u8* from = data.data();
+		u8* to = inst.slots[slot].data;
+		for (size_t i = 0; i + 4 <= bytes; i += 4)
+		{
+			u32 pixel;
+			std::memcpy(&pixel, from + i, 4);
+			pixel |= 0xff000000u;
+			std::memcpy(to + i, &pixel, 4);
+		}
+	}
+
+	std::lock_guard lock(inst.frame_mtx);
+	inst.frames_replaced += inst.frame_new;
+	if (inst.pending_slot >= 0)
+	{
+		inst.slots[inst.pending_slot].state = ignition_ps3::slot_state::free;
+		inst.pending_slot = -1;
+	}
+	if (slot >= 0)
+	{
+		inst.slots[slot] = {inst.slots[slot].data, ignition_ps3::slot_state::pending, width, height, pitch, is_bgra};
+		inst.pending_slot = slot;
+	}
+	else
+	{
+		inst.frame_pending = {std::move(data), width, height, pitch, is_bgra};
+	}
+	inst.frame_new = true;
 }
