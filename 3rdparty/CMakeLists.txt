@@ -16,6 +16,14 @@ endif()
 add_library(3rdparty_dummy_lib INTERFACE)
 
 
+if(PS5)
+	# The PS5 module takes its C library from the title it is loaded into: an
+	# empty target stands in for the libc that asmjit names, so none of the SDK's
+	# static libc is linked into it. zstd's tracing hooks are left out too.
+	add_library(c INTERFACE)
+	add_compile_definitions(ZSTD_TRACE=0)
+endif()
+
 # ZLib
 add_subdirectory(zlib EXCLUDE_FROM_ALL)
 
