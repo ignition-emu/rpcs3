@@ -7,7 +7,9 @@
 #include "Emu/Cell/lv2/sys_usbd.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Overlays/overlay_cursor.h"
+#ifndef __PROSPERO__ // No HID access in a PS5 title, so no Wiimote
 #include "Input/wiimote_handler.h"
+#endif
 #include "Input/pad_thread.h"
 #include <cmath>
 #include <climits>
@@ -211,8 +213,11 @@ void usb_device_guncon3::control_transfer(u8 bmRequestType, u8 bRequest, u16 wVa
 
 extern bool is_input_allowed();
 
-bool usb_device_guncon3::handle_wiimote(GunCon3_data& gc)
+bool usb_device_guncon3::handle_wiimote([[maybe_unused]] GunCon3_data& gc)
 {
+#ifdef __PROSPERO__
+	return false;
+#else
 	if (!get_wiimote_config().use_for_guncon.get())
 		return false;
 
@@ -284,6 +289,7 @@ bool usb_device_guncon3::handle_wiimote(GunCon3_data& gc)
 	}
 
 	return true;
+#endif
 }
 
 void usb_device_guncon3::interrupt_transfer(u32 buf_size, u8* buf, u32 endpoint, UsbTransfer* transfer)
