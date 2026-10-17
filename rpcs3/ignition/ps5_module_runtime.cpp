@@ -4,7 +4,7 @@
 // list, which a destructor of the module runs (the loader runs .fini_array
 // before it unmaps the module).
 #include <cstdlib>
-#include <mutex>
+#include <pthread.h>
 
 namespace
 {
@@ -15,11 +15,9 @@ namespace
 		exit_handler* previous;
 	};
 
-	std::mutex& handlers_lock()
-	{
-		static std::mutex lock;
-		return lock;
-	}
+	// A plain mutex, statically initialized: an object with a destructor would
+	// register it here, through __cxa_atexit, while still being made.
+	pthread_mutex_t g_handlers_lock = PTHREAD_MUTEX_INITIALIZER;
 
 	exit_handler* g_last_handler = nullptr;
 
@@ -34,14 +32,13 @@ namespace
 		while (true)
 		{
 			exit_handler* handler;
+			pthread_mutex_lock(&g_handlers_lock);
+			handler = g_last_handler;
+			if (handler)
 			{
-				std::lock_guard lock(handlers_lock());
-				handler = g_last_handler;
-				if (handler)
-				{
-					g_last_handler = handler->previous;
-				}
+				g_last_handler = handler->previous;
 			}
+			pthread_mutex_unlock(&g_handlers_lock);
 
 			if (!handler)
 			{
@@ -66,9 +63,10 @@ extern "C"
 			return -1;
 		}
 
-		std::lock_guard lock(handlers_lock());
+		pthread_mutex_lock(&g_handlers_lock);
 		*handler = {call, argument, g_last_handler};
 		g_last_handler = handler;
+		pthread_mutex_unlock(&g_handlers_lock);
 		return 0;
 	}
 
