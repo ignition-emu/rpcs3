@@ -41,6 +41,7 @@ LOG_CHANNEL(jit_log, "JIT");
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
 #include "llvm/ExecutionEngine/ObjectCache.h"
 #include "llvm/ExecutionEngine/JITEventListener.h"
@@ -690,10 +691,92 @@ bool jit_compiler::add_sub_disk_space(ssz space)
 	}).second;
 }
 
+#ifdef __PROSPERO__
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
+extern "C"
+{
+	// compiler-rt's builtins, which LLVM lowers 128-bit and half-float operations to
+	__int128 __divti3(__int128, __int128);
+	__int128 __modti3(__int128, __int128);
+	unsigned __int128 __udivti3(unsigned __int128, unsigned __int128);
+	unsigned __int128 __umodti3(unsigned __int128, unsigned __int128);
+	__int128 __multi3(__int128, __int128);
+	float __extendhfsf2(u16);
+	u16 __truncsfhf2(float);
+	u16 __truncdfhf2(double);
+	double __floattidf(__int128);
+	double __floatuntidf(unsigned __int128);
+	__int128 __fixdfti(double);
+	unsigned __int128 __fixunsdfti(double);
+	float __floattisf(__int128);
+	float __floatuntisf(unsigned __int128);
+	__int128 __fixsfti(float);
+	unsigned __int128 __fixunssfti(float);
+}
+
+// The functions compiled code calls, given to LLVM by name: a PS5 title has no
+// process symbol table, so the process handle LLVM opens finds none of them
+// (the table follows lavavex/rpcs3's rpcs3/ps5/ps5_dl.cpp).
+static void add_jit_symbols()
+{
+	const auto add = [](const char* name, auto* function)
+	{
+		llvm::sys::DynamicLibrary::AddSymbol(name, reinterpret_cast<void*>(function));
+	};
+
+	add("memcpy", &::memcpy);
+	add("memmove", &::memmove);
+	add("memset", &::memset);
+	add("memcmp", &::memcmp);
+	add("strlen", &::strlen);
+	add("malloc", &::malloc);
+	add("free", &::free);
+	add("abort", &::abort);
+
+#define ADD_F64(name) add(#name, static_cast<double (*)(double)>(&::name)); add(#name "f", static_cast<float (*)(float)>(&::name##f))
+	ADD_F64(sin); ADD_F64(cos); ADD_F64(tan);
+	ADD_F64(exp); ADD_F64(exp2); ADD_F64(log); ADD_F64(log2); ADD_F64(log10);
+	ADD_F64(sqrt); ADD_F64(floor); ADD_F64(ceil); ADD_F64(trunc); ADD_F64(round);
+	ADD_F64(rint); ADD_F64(nearbyint);
+#undef ADD_F64
+#define ADD_F64_2(name) add(#name, static_cast<double (*)(double, double)>(&::name)); add(#name "f", static_cast<float (*)(float, float)>(&::name##f))
+	ADD_F64_2(fmod); ADD_F64_2(pow); ADD_F64_2(fmin); ADD_F64_2(fmax);
+#undef ADD_F64_2
+	add("fma", static_cast<double (*)(double, double, double)>(&::fma));
+	add("fmaf", static_cast<float (*)(float, float, float)>(&::fmaf));
+	add("ldexp", static_cast<double (*)(double, int)>(&::ldexp));
+	add("ldexpf", static_cast<float (*)(float, int)>(&::ldexpf));
+
+	add("__divti3", &__divti3);
+	add("__modti3", &__modti3);
+	add("__udivti3", &__udivti3);
+	add("__umodti3", &__umodti3);
+	add("__multi3", &__multi3);
+	add("__extendhfsf2", &__extendhfsf2);
+	add("__truncsfhf2", &__truncsfhf2);
+	add("__truncdfhf2", &__truncdfhf2);
+	add("__floattidf", &__floattidf);
+	add("__floatuntidf", &__floatuntidf);
+	add("__fixdfti", &__fixdfti);
+	add("__fixunsdfti", &__fixunsdfti);
+	add("__floattisf", &__floattisf);
+	add("__floatuntisf", &__floatuntisf);
+	add("__fixsfti", &__fixsfti);
+	add("__fixunssfti", &__fixunssfti);
+}
+#endif
+
 jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, std::string_view _cpu, u32 flags, std::function<u64(const std::string&)> symbols_cement) noexcept
 	: m_context(new llvm::LLVMContext)
 	, m_cpu(cpu(_cpu))
 {
+#ifdef __PROSPERO__
+	[[maybe_unused]] static const bool s_jit_symbols = (add_jit_symbols(), true);
+#endif
+
 	[[maybe_unused]] static const bool s_install_llvm_error_handler = []()
 	{
 		llvm::remove_fatal_error_handler();
