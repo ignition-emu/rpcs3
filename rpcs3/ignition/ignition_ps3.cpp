@@ -870,16 +870,46 @@ namespace
 	std::mutex g_config_layers_mtx;
 	std::array<std::string, 3> g_config_layers;
 
-	std::string config_layer_yaml(config_layer layer)
-	{
-		std::lock_guard lock(g_config_layers_mtx);
-		return g_config_layers[static_cast<size_t>(layer)];
-	}
+	// The embed's own settings, in the same places. Below the player's: Write
+	// Color Buffers, which some titles (e.g. Demon's Souls) need to render
+	// correctly. Above every layer: Vulkan for the offscreen path, and no PPU
+	// compilation hint, as the host draws compilation progress itself.
+	constexpr std::string_view embed_under_global = "Video:\n  Write Color Buffers: true\n";
+	constexpr std::string_view embed_over_game = "Video:\n  Renderer: Vulkan\nMiscellaneous:\n  Show PPU compilation hint: false\n";
 
 	YAML::Node yaml_map_or_empty(const std::string& text)
 	{
 		auto [node, error] = yaml_load(text);
 		return error.empty() && node.IsMap() ? node : YAML::Node(YAML::NodeType::Map);
+	}
+
+	std::string yaml_text(const YAML::Node& node);
+
+	// A layer as the boot applies it: the host's settings with the embed's,
+	// which go under the host's below the player's and over them above.
+	std::string config_layer_yaml(config_layer layer)
+	{
+		std::string host;
+		{
+			std::lock_guard lock(g_config_layers_mtx);
+			host = g_config_layers[static_cast<size_t>(layer)];
+		}
+		YAML::Node merged(YAML::NodeType::Map);
+		switch (layer)
+		{
+		case config_layer::under_global:
+			merged += yaml_map_or_empty(std::string(embed_under_global));
+			merged += yaml_map_or_empty(host);
+			break;
+		case config_layer::under_game:
+			merged += yaml_map_or_empty(host);
+			break;
+		case config_layer::over_game:
+			merged += yaml_map_or_empty(host);
+			merged += yaml_map_or_empty(std::string(embed_over_game));
+			break;
+		}
+		return merged.size() ? yaml_text(merged) : std::string{};
 	}
 
 	YAML::Node yaml_file_or_empty(const std::string& path)
@@ -984,12 +1014,17 @@ namespace
 		{
 			return;
 		}
-		const YAML::Node global = yaml_difference(player_global_layer(), defaults);
+		// The embed's own settings, which the module used to save into
+		// config.yml, are no player's either.
+		YAML::Node below_global = YAML::Clone(defaults);
+		below_global += yaml_map_or_empty(std::string(embed_under_global));
+		below_global += yaml_map_or_empty(std::string(embed_over_game));
+		const YAML::Node global = yaml_difference(player_global_layer(), below_global);
 		if (fs::is_file(global_config_path()))
 		{
 			fs::write_file(global_config_path(), fs::rewrite, yaml_text(global));
 		}
-		YAML::Node below_games = YAML::Clone(defaults);
+		YAML::Node below_games = YAML::Clone(below_global);
 		below_games += global;
 		const std::string custom_dir = rpcs3::utils::get_custom_config_dir();
 		for (const auto& entry : fs::dir(custom_dir))
@@ -1326,19 +1361,17 @@ ignition_ps3* ignition_ps3_create(const ignition_ps3_dirs* dirs)
 	// emulator log (overlay/OSK/audio/etc.) was invisible for diagnosis.
 	rpcs3::utils::configure_logs(Emu.IsStopped());
 
-	// Settings the embed needs, written into the now-isolated config so boot
-	// honours them: Vulkan for the offscreen path, and Write Color Buffers, which
-	// some titles (e.g. Demon's Souls) need to render correctly. Decoders stay at
-	// RPCS3's LLVM-recompiler defaults.
+	// The settings the embed needs come with each boot's configuration
+	// (config_layer_yaml), not from config.yml, which holds only the player's.
+	// They are set here too, for anything that reads g_cfg before a boot. The
+	// host draws compilation progress itself, from ignition_ps3_progress_of:
+	// RPCS3's own hint would say it twice, through the native overlay that the
+	// frame capture composites, the one up 15 ms before the RSX died in the
+	// freeze that hint's removal fixed.
 	g_cfg.video.renderer.set(video_renderer::vulkan);
 	g_cfg.video.write_color_buffers.set(true);
-	// The host draws compilation progress itself, from ignition_ps3_progress_of.
-	// Leaving RPCS3's own hint on would say it twice, and says it through the
-	// native overlay -- which is the path the frame capture composites, and the
-	// one up 15 ms before the RSX died in the freeze this fixed.
 	g_cfg.misc.show_ppu_compilation_hint.set(false);
 	g_progress_drawn_by_host = true;
-	Emulator::SaveSettings(g_cfg.to_string(), {});
 
 	install_overlay_icons();
 
