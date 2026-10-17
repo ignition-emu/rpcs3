@@ -688,8 +688,17 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		// With an overlay drawn into the capture, the frame is first scaled up
 		// to fit the size an offscreen host shows it at
 		// (vk::g_offscreen_output_size), keeping its shape, so the overlay is
-		// drawn at that size and not scaled up with the frame afterwards.
-		const bool overlay_in_capture = g_cfg.video.record_with_overlays && has_overlay;
+		// drawn at that size and not scaled up with the frame afterwards. Only an
+		// overlay that shows counts: the manager keeps the message overlay once
+		// it is made, and a frame scaled for it while it is empty is several
+		// times the bytes for the host to copy.
+		const bool overlay_shows = has_overlay && [&]()
+		{
+			std::lock_guard lock(*m_overlay_manager);
+			const auto& views = m_overlay_manager->get_views();
+			return std::any_of(views.begin(), views.end(), [](const auto& view) { return view->visible.load(); });
+		}();
+		const bool overlay_in_capture = g_cfg.video.record_with_overlays && overlay_shows;
 		u32 capture_width = buffer_width;
 		u32 capture_height = buffer_height;
 		if (const u64 output = vk::g_offscreen_output_size.load(); overlay_in_capture && output)
