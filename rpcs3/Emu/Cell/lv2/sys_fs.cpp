@@ -20,6 +20,149 @@
 
 LOG_CHANNEL(sys_fs);
 
+#ifdef __PROSPERO__
+// On the PS5 each write to /data costs about 1 ms at 4 KB and 4 ms at 64 KB,
+// where 1 MB writes run at 175 MB/s (godot-ps5's --ps5-probe-io): a game's
+// sequential writes to a file are gathered into 1 MB writes. Every other
+// operation writes the gathered bytes first.
+class ps5_write_behind_file final : public fs::file_base
+{
+	static constexpr usz s_gather = 1u << 20;
+
+	fs::file m_file;
+	std::vector<u8> m_held;
+	std::mutex m_mutex;
+
+	void flush()
+	{
+		if (m_held.empty())
+		{
+			return;
+		}
+
+		if (const u64 put = m_file.write(m_held.data(), m_held.size()); put != m_held.size())
+		{
+			sys_fs.error("Wrote %u of the %u bytes gathered for a file (%s)", put, m_held.size(), fs::g_tls_error);
+		}
+
+		m_held.clear();
+	}
+
+public:
+	explicit ps5_write_behind_file(fs::file&& file)
+		: m_file(std::move(file))
+	{
+	}
+
+	~ps5_write_behind_file() override
+	{
+		flush();
+	}
+
+	fs::stat_t get_stat() override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.get_stat();
+	}
+
+	void sync() override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		m_file.sync();
+	}
+
+	bool trunc(u64 length) override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.trunc(length);
+	}
+
+	u64 read(void* buffer, u64 size) override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.read(buffer, size);
+	}
+
+	u64 read_at(u64 offset, void* buffer, u64 size) override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.read_at(offset, buffer, size);
+	}
+
+	u64 write(const void* buffer, u64 size) override
+	{
+		std::lock_guard lock(m_mutex);
+
+		if (size >= s_gather)
+		{
+			flush();
+			return m_file.write(buffer, size);
+		}
+
+		if (m_held.size() + size > s_gather)
+		{
+			flush();
+		}
+
+		if (m_held.capacity() < s_gather)
+		{
+			m_held.reserve(s_gather);
+		}
+
+		const auto bytes = static_cast<const u8*>(buffer);
+		m_held.insert(m_held.end(), bytes, bytes + size);
+		return size;
+	}
+
+	u64 seek(s64 offset, fs::seek_mode whence) override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.seek(offset, whence);
+	}
+
+	u64 size() override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.size();
+	}
+
+	fs::native_handle get_handle() override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.get_handle();
+	}
+
+	fs::file_id get_id() override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.get_id();
+	}
+
+	u64 write_gather(const fs::iovec_clone* buffers, u64 buf_count) override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		return m_file.write_gather(buffers, buf_count);
+	}
+
+	void release() override
+	{
+		std::lock_guard lock(m_mutex);
+		flush();
+		m_file.release_handle();
+	}
+};
+#endif
+
 lv2_fs_mount_point g_mp_sys_dev_usb{"/dev_usb", "CELL_FS_FAT", "CELL_FS_IOS:USB_MASS_STORAGE", 512, 0x100, 4096, lv2_mp_flag::no_uid_gid};
 lv2_fs_mount_point g_mp_sys_dev_dvd{"/dev_ps2disc", "CELL_FS_ISO9660", "CELL_FS_IOS:PATA1_BDVD_DRIVE", 2048, 0x100, 32768, lv2_mp_flag::read_only + lv2_mp_flag::no_uid_gid, &g_mp_sys_dev_usb};
 lv2_fs_mount_point g_mp_sys_dev_bdvd{"/dev_bdvd", "CELL_FS_ISO9660", "CELL_FS_IOS:PATA0_BDVD_DRIVE", 2048, 0x4D955, 2048, lv2_mp_flag::read_only + lv2_mp_flag::no_uid_gid, &g_mp_sys_dev_dvd};
@@ -1402,6 +1545,13 @@ lv2_file::open_raw_result_t lv2_file::open_raw(const std::string& local_path, s3
 		default: break;
 		}
 	}
+
+#ifdef __PROSPERO__
+	if (open_mode & fs::write && type == lv2_file_type::regular)
+	{
+		file.reset(std::make_unique<ps5_write_behind_file>(std::move(file)));
+	}
+#endif
 
 	return {.error = {}, .file = std::move(file)};
 }
