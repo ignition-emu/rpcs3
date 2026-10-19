@@ -1816,6 +1816,17 @@ int32_t ignition_ps3_stats_of(ignition_ps3* self, ignition_ps3_stats* out)
 		{
 			self->rsx_cpu_ns += rsx_thread->get_cycles();
 		}
+		if (dynamic_cast<VKGSRender*>(rsx::get_current_renderer()))
+		{
+			if (const vk::render_device* device = vk::get_current_renderer())
+			{
+				const auto& memory = device->get_memory_mapping();
+				stats.gpu_device_local_bytes = vk::vmm_get_application_memory_usage(memory.device_local);
+				stats.gpu_host_visible_bytes = vk::vmm_get_application_memory_usage(memory.host_visible_coherent);
+				stats.gpu_surface_cache_bytes = vk::vmm_get_application_pool_usage(vk::VMM_ALLOCATION_POOL_SURFACE_CACHE);
+				stats.gpu_texture_cache_bytes = vk::vmm_get_application_pool_usage(vk::VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+			}
+		}
 	}
 	stats.ppu_cpu_ns = self->ppu_cpu_ns;
 	stats.spu_cpu_ns = self->spu_cpu_ns;

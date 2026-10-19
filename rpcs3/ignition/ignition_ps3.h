@@ -211,6 +211,12 @@ typedef struct ignition_ps3_stats {
     uint64_t rsx_cpu_ns;
     uint64_t process_cpu_ns;    // the whole process's, user and system
     uint64_t audio_frames_shed; // stereo frames the audio ring shed past its cap
+    // The Vulkan renderer's memory in use now, as RPCS3's own accounting has it;
+    // 0 under another renderer. Modules up to ignition-v0.1.7 leave these out.
+    uint64_t gpu_device_local_bytes;
+    uint64_t gpu_host_visible_bytes;
+    uint64_t gpu_surface_cache_bytes; // of the above, render targets
+    uint64_t gpu_texture_cache_bytes; // and uploaded textures
 } ignition_ps3_stats;
 
 // Fills `out` up to out->size bytes. Returns 1, or 0 for a null argument.
