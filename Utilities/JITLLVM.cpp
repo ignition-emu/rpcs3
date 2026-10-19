@@ -870,6 +870,16 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 			.create());
 	}
 
+#ifdef __PROSPERO__
+	// MCJIT registers LLVM's GDB listener, which keeps a copy of every object
+	// loaded for a debugger to read: no debugger reads a PS5 title's, and the
+	// copies came to 289 MB of GTA V's PPU code.
+	if (m_engine)
+	{
+		m_engine->UnregisterJITEventListener(llvm::JITEventListener::createGDBRegistrationListener());
+	}
+#endif
+
 	if (!_link.empty())
 	{
 		for (auto&& [name, addr] : _link)
