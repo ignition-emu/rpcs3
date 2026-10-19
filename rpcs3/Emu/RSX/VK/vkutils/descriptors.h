@@ -95,7 +95,14 @@ namespace vk
 
 	class descriptor_set
 	{
+#ifdef __PROSPERO__
+		// Each program's sets reserve their pools whole, so the PS5's shared
+		// memory pays for every program: at 16384, GTA V's 290 held 517 MB. A
+		// smaller pool only flushes its writes sooner.
+		static constexpr size_t max_cache_size = 2048;
+#else
 		static constexpr size_t max_cache_size = 16384;
+#endif
 		static constexpr size_t max_overflow_size = 64;
 		static constexpr size_t m_pool_size = max_cache_size + max_overflow_size;
 
