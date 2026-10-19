@@ -242,6 +242,9 @@ extern "C" void ignition_x11_destroy_window(void* display, unsigned long window)
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #endif
+
+LOG_CHANNEL(sys_log, "SYS");
+
 extern atomic_t<recording_mode> g_recording_mode;
 
 class capture_audio_backend;
@@ -870,6 +873,47 @@ namespace
 	std::mutex g_config_layers_mtx;
 	std::array<std::string, 3> g_config_layers;
 
+	// RPCS3's game configuration database, as desktop RPCS3 downloads it
+	// (api.rpcs3.net/config), from the file the host names
+	// (ignition_ps3_set_config_database). A title's entry goes at the bottom of
+	// the host's per-game layer, under the console model's values and the
+	// player's custom config. Desktop drops the entry whenever a custom config
+	// exists, which the embed's sparse custom configs would make the usual case.
+	std::string g_config_database_path;
+
+	std::string database_config(const std::string& title_id)
+	{
+		std::string path;
+		{
+			std::lock_guard lock(g_config_layers_mtx);
+			path = g_config_database_path;
+		}
+		if (path.empty() || title_id.empty())
+		{
+			return {};
+		}
+		const fs::file file{path};
+		if (!file)
+		{
+			sys_log.error("Could not read RPCS3's config database (%s)", path);
+			return {};
+		}
+		// The database is JSON, which YAML reads.
+		auto [root, error] = yaml_load(file.to_string());
+		if (!error.empty() || !root.IsMap())
+		{
+			sys_log.error("Could not parse RPCS3's config database (%s): %s", path, error);
+			return {};
+		}
+		const YAML::Node entry = root["games"][title_id]["config"];
+		if (!entry || !entry.IsScalar())
+		{
+			return {};
+		}
+		sys_log.notice("Applying RPCS3's database config for %s", title_id);
+		return entry.Scalar();
+	}
+
 	// The embed's own settings, in the same places. Below the player's: Write
 	// Color Buffers, which some titles (e.g. Demon's Souls) need to render
 	// correctly. Above every layer: Vulkan for the offscreen path, and no PPU
@@ -902,6 +946,7 @@ namespace
 			merged += yaml_map_or_empty(host);
 			break;
 		case config_layer::under_game:
+			merged += yaml_map_or_empty(database_config(Emu.GetTitleID()));
 			merged += yaml_map_or_empty(host);
 			break;
 		case config_layer::over_game:
@@ -2060,6 +2105,18 @@ int32_t ignition_ps3_set_config(ignition_ps3*, const char* path, const char* val
 		Emu.SaveSettings(yaml_text(root), Emu.GetTitleID());
 	}
 	return needs_restart ? 1 : 0;
+}
+
+int32_t ignition_ps3_set_config_database(ignition_ps3*, const char* path)
+{
+	const std::string given = path ? path : "";
+	if (!given.empty() && !fs::is_file(given))
+	{
+		return 0;
+	}
+	std::lock_guard lock(g_config_layers_mtx);
+	g_config_database_path = given;
+	return 1;
 }
 
 int32_t ignition_ps3_set_config_layers(ignition_ps3*, const char* under_global, const char* under_game, const char* over_game)

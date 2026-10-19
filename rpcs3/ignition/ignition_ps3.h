@@ -303,6 +303,12 @@ IGNITION_PS3_API int32_t ignition_ps3_set_config(ignition_ps3*, const char* path
 // changes none. Optional within ABI 4: modules after ignition-v0.1.7 export it.
 IGNITION_PS3_API int32_t ignition_ps3_set_config_layers(ignition_ps3*, const char* under_global, const char* under_game, const char* over_game);
 
+/* RPCS3's game configuration database, the JSON desktop RPCS3 downloads from
+ * api.rpcs3.net/config, as a file: each boot applies the title's entry at the
+ * bottom of the per-game layer. An empty path turns it off. Returns 1, or 0
+ * when the file does not exist. Optional within ABI 4. */
+IGNITION_PS3_API int32_t ignition_ps3_set_config_database(ignition_ps3*, const char* path);
+
 // config_reset reverts a whole scope to what it inherits. scope 1 (game): drop
 // this title's custom config so it follows the global layer, applied live. scope
 // 0 (global): reset config.yml to the built-in defaults; and_narrower != 0 also
