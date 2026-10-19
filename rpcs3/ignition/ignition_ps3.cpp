@@ -1672,6 +1672,14 @@ void ignition_ps3_set_pad(ignition_ps3* self, uint32_t port, const ignition_ps3_
 		// dialogs ignore it -- e.g. you cannot enter a character name.
 		std::lock_guard lock(pad::g_pad_mutex);
 		pt->InitLddPad(port, nullptr);
+
+		// Described to the game as a DualShock 3, as RPCS3's own pad handlers
+		// report one: an LDD pad is a custom controller with no capabilities,
+		// and GTA V's first screen ignored it.
+		pad->m_port_status = CELL_PAD_STATUS_CONNECTED | CELL_PAD_STATUS_ASSIGN_CHANGES;
+		pad->m_device_capability = CELL_PAD_CAPABILITY_PS3_CONFORMITY | CELL_PAD_CAPABILITY_PRESS_MODE |
+			CELL_PAD_CAPABILITY_SENSOR_MODE | CELL_PAD_CAPABILITY_HP_ANALOG_STICK | CELL_PAD_CAPABILITY_ACTUATOR;
+		pad->m_device_type = CELL_PAD_DEV_TYPE_STANDARD;
 	}
 
 	// The host samples buttons already in cell-pad order: DIGITAL1 in the low
@@ -1709,6 +1717,12 @@ void ignition_ps3_set_pad(ignition_ps3* self, uint32_t port, const ignition_ps3_
 	press(CELL_PAD_BTN_OFFSET_PRESS_R1,       CELL_PAD_CTRL_R1,       digital2);
 	press(CELL_PAD_BTN_OFFSET_PRESS_L2,       CELL_PAD_CTRL_L2,       digital2);
 	press(CELL_PAD_BTN_OFFSET_PRESS_R2,       CELL_PAD_CTRL_R2,       digital2);
+
+	// The motion sensors at rest, level and still, for a game that reads them.
+	d.button[CELL_PAD_BTN_OFFSET_SENSOR_X] = DEFAULT_MOTION_X;
+	d.button[CELL_PAD_BTN_OFFSET_SENSOR_Y] = DEFAULT_MOTION_Y;
+	d.button[CELL_PAD_BTN_OFFSET_SENSOR_Z] = DEFAULT_MOTION_Z;
+	d.button[CELL_PAD_BTN_OFFSET_SENSOR_G] = DEFAULT_MOTION_G;
 }
 size_t ignition_ps3_read_audio(ignition_ps3* self, int16_t* buf, size_t max_frames)
 {
