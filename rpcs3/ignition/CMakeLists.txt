@@ -123,7 +123,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 target_compile_features(rpcs3_ignition PRIVATE cxx_std_23)
-target_compile_definitions(rpcs3_ignition PRIVATE IGNITION_EMBED)
+# QT_NO_KEYWORDS: Qt's signals/slots macros would otherwise rewrite names such
+# as the instance's frame slots; the embed's Qt code uses neither keyword.
+target_compile_definitions(rpcs3_ignition PRIVATE IGNITION_EMBED QT_NO_KEYWORDS)
 
 set_target_properties(rpcs3_ignition PROPERTIES
 	AUTOMOC ON
