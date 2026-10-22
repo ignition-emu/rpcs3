@@ -41,6 +41,9 @@ struct emu_callbacks
 	std::function<std::shared_ptr<class audio_device_enumerator>(u64)> get_audio_enumerator; // (audio_renderer)
 	std::function<std::shared_ptr<class MsgDialogBase>()> get_msg_dialog;
 	std::function<std::shared_ptr<class OskDialogBase>()> get_osk_dialog;
+	// Ignition: a host's own keyboard, tried before RPCS3's overlay one. A null
+	// dialog, or no function, leaves the overlay's.
+	std::function<std::shared_ptr<class OskDialogBase>()> get_host_osk_dialog;
 	std::function<std::unique_ptr<class SaveDialogBase>()> get_save_dialog;
 	std::function<std::shared_ptr<class SendMessageDialogBase>()> get_sendmessage_dialog;
 	std::function<std::shared_ptr<class RecvMessageDialogBase>()> get_recvmessage_dialog;

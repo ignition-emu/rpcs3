@@ -35,6 +35,7 @@
 #include "Emu/Io/pad_config.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/MouseHandler.h"
+#include "Emu/Io/interception.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
 #include "Emu/Io/Null/NullMouseHandler.h"
 #include "Emu/Audio/AudioBackend.h"
@@ -288,6 +289,19 @@ struct ignition_ps3
 	uint32_t gpu_slot_frames = 0;
 	uint64_t audio_frames_shed = 0;
 	uint64_t ppu_cpu_ns = 0, spu_cpu_ns = 0, rsx_cpu_ns = 0;
+
+	// A game's on-screen keyboard while the host draws it (set_host_osk): the
+	// open dialog, its request as osk_state reports it, and a serial that
+	// changes with each request. Guarded by osk_mtx.
+	std::mutex osk_mtx;
+	bool host_osk = false;
+	bool osk_open = false;
+	uint32_t osk_serial = 0;
+	uint32_t osk_limit = 0;
+	uint32_t osk_prohibit = 0;
+	std::string osk_message;
+	std::string osk_text;
+	std::weak_ptr<OskDialogBase> osk;
 };
 
 // A windowless GSFrameBase. It never presents to a window: it forces the RSX to
@@ -516,6 +530,86 @@ public:
 	}
 };
 
+// A game's on-screen keyboard, drawn by the host (ignition_ps3_set_host_osk).
+// Create hands the request to osk_state. The host's answer (osk_answer)
+// closes it as RPCS3's overlay keyboard closes, calling on_osk_close on the
+// main thread, and so does a Close from the game unless it terminates. While
+// it is open the game's input is intercepted, as under RPCS3's overlays.
+class ignition_osk_dialog final : public OskDialogBase
+{
+public:
+	void Create(const osk_params& params) override
+	{
+		state = OskDialogState::Open;
+		if (!g_inst)
+		{
+			return;
+		}
+		input::SetIntercepted(true);
+		std::lock_guard lock(g_inst->osk_mtx);
+		g_inst->osk_serial++;
+		g_inst->osk_open = true;
+		g_inst->osk_limit = params.charlimit;
+		g_inst->osk_prohibit = params.prohibit_flags;
+		g_inst->osk_message = utf16_to_utf8(params.message);
+		g_inst->osk_text = params.init_text ? utf16_to_utf8(std::u16string_view(params.init_text)) : std::string();
+	}
+
+	void Clear(bool clear_all_data) override
+	{
+		if (clear_all_data)
+		{
+			set_text({});
+		}
+	}
+
+	// At the end of the text, as the Qt fallback inserts.
+	void Insert(const std::u16string& text) override { set_text(text); }
+	void SetText(const std::u16string& text) override { set_text(text); }
+
+	void Close(s32 status) override
+	{
+		end();
+		if (status != FAKE_CELL_OSKDIALOG_CLOSE_TERMINATE && on_osk_close)
+		{
+			Emu.CallFromMainThread([this, status]() { on_osk_close(status); });
+		}
+	}
+
+	void answer(bool confirmed, const std::u16string& text)
+	{
+		set_text(text);
+		end();
+		const s32 status = confirmed ? CELL_OSKDIALOG_CLOSE_CONFIRM : CELL_OSKDIALOG_CLOSE_CANCEL;
+		if (on_osk_close)
+		{
+			Emu.CallFromMainThread([this, status]() { on_osk_close(status); });
+		}
+	}
+
+private:
+	void set_text(const std::u16string& text)
+	{
+		const usz count = std::min<usz>(text.size(), osk_text.size() - 1);
+		std::copy_n(text.begin(), count, osk_text.begin());
+		std::fill(osk_text.begin() + count, osk_text.end(), u'\0');
+	}
+
+	void end()
+	{
+		bool was_open = false;
+		if (g_inst)
+		{
+			std::lock_guard lock(g_inst->osk_mtx);
+			was_open = std::exchange(g_inst->osk_open, false);
+		}
+		if (was_open)
+		{
+			input::SetIntercepted(false);
+		}
+	}
+};
+
 // Fills emu_callbacks without Qt: the pump is a plain queue. Most of the rest is
 // stubbed like headless_application -- but we run Vulkan with native overlays, so
 // where the overlay path needs a real value (fonts, localized text, video source)
@@ -590,6 +684,21 @@ static emu_callbacks make_callbacks(ignition_ps3* self)
 
 	cb.get_msg_dialog                 = []() -> std::shared_ptr<MsgDialogBase> { return {}; };
 	cb.get_osk_dialog                 = []() -> std::shared_ptr<OskDialogBase> { return {}; };
+	cb.get_host_osk_dialog            = []() -> std::shared_ptr<OskDialogBase>
+	{
+		if (!g_inst)
+		{
+			return {};
+		}
+		std::lock_guard lock(g_inst->osk_mtx);
+		if (!g_inst->host_osk)
+		{
+			return {};
+		}
+		auto dlg = std::make_shared<ignition_osk_dialog>();
+		g_inst->osk = dlg;
+		return dlg;
+	};
 	cb.get_save_dialog                = []() -> std::unique_ptr<SaveDialogBase> { return std::make_unique<ignition_save_dialog>(); };
 	cb.get_trophy_notification_dialog = []() -> std::unique_ptr<TrophyNotificationBase> { return {}; };
 
@@ -1903,6 +2012,68 @@ void ignition_ps3_screenshot(ignition_ps3*)
 {
 	// Polled and saved by the presenter, into <config_dir>/screenshots.
 	g_user_asked_for_screenshot = true;
+}
+
+void ignition_ps3_set_host_osk(ignition_ps3* self, int32_t enabled)
+{
+	if (!self)
+	{
+		return;
+	}
+	std::lock_guard lock(self->osk_mtx);
+	self->host_osk = enabled != 0;
+}
+
+// Copies `text` into `out` of `cap` bytes, cut at a whole UTF-8 character.
+static void copy_utf8(char* out, size_t cap, const std::string& text)
+{
+	size_t n = std::min(text.size(), cap - 1);
+	while (n > 0 && n < text.size() && (static_cast<u8>(text[n]) & 0xC0) == 0x80)
+	{
+		n--;
+	}
+	std::memcpy(out, text.data(), n);
+	out[n] = '\0';
+}
+
+int32_t ignition_ps3_osk_state(ignition_ps3* self, ignition_ps3_osk* out)
+{
+	if (!self || !out)
+	{
+		return 0;
+	}
+	std::lock_guard lock(self->osk_mtx);
+	if (!self->osk_open)
+	{
+		return 0;
+	}
+	out->serial = self->osk_serial;
+	out->max_length = self->osk_limit;
+	out->prohibit = self->osk_prohibit;
+	copy_utf8(out->message, sizeof(out->message), self->osk_message);
+	copy_utf8(out->text, sizeof(out->text), self->osk_text);
+	return 1;
+}
+
+void ignition_ps3_osk_answer(ignition_ps3* self, uint32_t serial, int32_t confirmed, const char* text)
+{
+	if (!self)
+	{
+		return;
+	}
+	std::shared_ptr<OskDialogBase> dlg;
+	{
+		std::lock_guard lock(self->osk_mtx);
+		if (!self->osk_open || serial != self->osk_serial)
+		{
+			return;
+		}
+		dlg = self->osk.lock();
+	}
+	if (auto osk = std::dynamic_pointer_cast<ignition_osk_dialog>(dlg))
+	{
+		osk->answer(confirmed != 0, utf8_to_utf16(text ? text : ""));
+	}
 }
 
 // Opens RPCS3's native trophy overlay. Returns 1 if a trophy set is loaded.

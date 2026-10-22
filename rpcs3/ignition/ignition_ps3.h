@@ -308,6 +308,28 @@ IGNITION_PS3_API void    ignition_ps3_restart(ignition_ps3*);
 IGNITION_PS3_API void    ignition_ps3_screenshot(ignition_ps3*);
 IGNITION_PS3_API int32_t ignition_ps3_open_trophy_list(ignition_ps3*);
 
+// A game's on-screen keyboard (cellOskDialog), drawn by the host. With
+// set_host_osk(1), a keyboard the game opens is the host's to show rather
+// than RPCS3's overlay: osk_state returns 1 while one waits for text, with its
+// request, and osk_answer gives the text back, confirmed or cancelled, for the
+// request of that serial. A request the game closes itself stops being
+// reported. Strings are UTF-8, cut at a whole character.
+//
+// Optional within ABI 4: modules from ignition-v0.1.8 export them, earlier
+// ones do not, so a host resolves them by name and leaves the overlay's
+// keyboard without them.
+typedef struct {
+    uint32_t serial;     // changes with each keyboard the game opens
+    uint32_t max_length; // characters, 0 for any
+    uint32_t prohibit;   // CELL_OSKDIALOG_NO_SPACE (1), _NO_RETURN (2), ...
+    char message[1540];  // shown above the text
+    char text[1540];     // the text to start from
+} ignition_ps3_osk;
+
+IGNITION_PS3_API void    ignition_ps3_set_host_osk(ignition_ps3*, int32_t enabled);
+IGNITION_PS3_API int32_t ignition_ps3_osk_state(ignition_ps3*, ignition_ps3_osk* out);
+IGNITION_PS3_API void    ignition_ps3_osk_answer(ignition_ps3*, uint32_t serial, int32_t confirmed, const char* text);
+
 #ifdef __cplusplus
 }
 #endif

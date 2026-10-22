@@ -135,7 +135,13 @@ std::shared_ptr<OskDialogBase> _get_osk_dialog(bool create)
 			return nullptr;
 		}
 
-		if (auto manager = g_fxo->try_get<rsx::overlays::display_manager>())
+		std::shared_ptr<OskDialogBase> host_dlg = g_emu_callbacks.get_host_osk_dialog ? g_emu_callbacks.get_host_osk_dialog() : nullptr;
+
+		if (host_dlg)
+		{
+			osk.dlg = std::move(host_dlg);
+		}
+		else if (auto manager = g_fxo->try_get<rsx::overlays::display_manager>())
 		{
 			std::shared_ptr<rsx::overlays::osk_dialog> dlg = std::make_shared<rsx::overlays::osk_dialog>();
 			osk.dlg = manager->add(dlg);
