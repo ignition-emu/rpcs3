@@ -14,10 +14,12 @@
 #include "Emu/RSX/Overlays/Trophies/overlay_trophy_list_dialog.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Null/NullGSRender.h"
-#include "Emu/RSX/VK/VKGSRender.h"
-#include "Emu/RSX/GSFrameBase.h"
+// Before VKGSRender.h, whose X11 swapchain defines CWX (X11/X.h), the name of
+// an SPU instruction in SPUOpcodes.h.
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/RSX/VK/VKGSRender.h"
+#include "Emu/RSX/GSFrameBase.h"
 #include "Emu/IdManager.h"
 #include "Emu/system_config.h"
 #include "Emu/Io/Null/null_camera_handler.h"
